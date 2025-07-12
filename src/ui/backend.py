@@ -35,7 +35,10 @@ class Backend(QObject):
         self.uploader_service = MangaUploaderService()
         self.upload_queue = UploadQueue(max_concurrent=3)
         self._upload_progress = 0.0
-        self._available_hosts = ["Catbox", "Imgur"]
+        self._available_hosts = [
+            "Catbox", "Imgur", "ImgBB", "Lensdump", 
+            "Pixeldrain", "Gofile", "ImageChest", "Imgbox"
+        ]
         self.manga_model = MangaListModel(self)
         self.chapter_model = ChapterListModel(self)
         self.github_folder_model = GitHubFolderListModel(self)
@@ -60,21 +63,36 @@ class Backend(QObject):
         # Queue will be started when event loop is ready
     
     def _init_hosts(self):
-        # Initialize Catbox
-        catbox_config = self.config_manager.get_host_config("Catbox")
-        if catbox_config and catbox_config.enabled:
-            catbox_host = CatboxHost(catbox_config.model_dump())
-            self.uploader_service.register_host("Catbox", catbox_host)
+        # Initialize all hosts
+        host_classes = {
+            "Catbox": ("CatboxHost", CatboxHost),
+            "Imgur": ("ImgurHost", None),  # Will be imported dynamically
+            "ImgBB": ("ImgBBHost", None),
+            "Lensdump": ("LensdumpHost", None),
+            "Pixeldrain": ("PixeldrainHost", None),
+            "Gofile": ("GofileHost", None),
+            "ImageChest": ("ImageChestHost", None),
+            "Imgbox": ("ImgboxHost", None)
+        }
         
-        # Initialize Imgur (always register, even if not enabled)
-        imgur_config = self.config_manager.get_host_config("Imgur")
-        if imgur_config:
+        for host_name, (class_name, host_class) in host_classes.items():
             try:
-                from core.hosts import ImgurHost
-                imgur_host = ImgurHost(imgur_config.model_dump())
-                self.uploader_service.register_host("Imgur", imgur_host)
+                host_config = self.config_manager.get_host_config(host_name)
+                if host_config:  # Register all hosts, not just enabled ones
+                    if host_class is None:
+                        # Dynamic import
+                        from core.hosts import (
+                            ImgurHost, ImgBBHost, LensdumpHost, PixeldrainHost,
+                            GofileHost, ImageChestHost, ImgboxHost
+                        )
+                        host_class = locals()[class_name]
+                    
+                    host_instance = host_class(host_config.model_dump())
+                    self.uploader_service.register_host(host_name, host_instance)
+                    logger.debug(f"Initialized {host_name} host (enabled: {host_config.enabled})")
+                    
             except Exception as e:
-                logger.warning(f"Failed to initialize Imgur host: {e}")
+                logger.warning(f"Failed to initialize {host_name} host: {e}")
         
         # Set default host
         self.uploader_service.set_host(self.config_manager.config.selected_host)
@@ -119,6 +137,21 @@ class Backend(QObject):
     def imgurAccessToken(self):
         imgur_config = self.config_manager.config.hosts.get("Imgur")
         return imgur_config.access_token if imgur_config and imgur_config.access_token else ""
+    
+    @Property(str, notify=configChanged)
+    def imgbbApiKey(self):
+        imgbb_config = self.config_manager.config.hosts.get("ImgBB")
+        return imgbb_config.api_key if imgbb_config and imgbb_config.api_key else ""
+    
+    @Property(str, notify=configChanged)
+    def imageChestApiKey(self):
+        imagechest_config = self.config_manager.config.hosts.get("ImageChest")
+        return imagechest_config.api_key if imagechest_config and imagechest_config.api_key else ""
+    
+    @Property(str, notify=configChanged)
+    def pixeldrainApiKey(self):
+        pixeldrain_config = self.config_manager.config.hosts.get("Pixeldrain")
+        return pixeldrain_config.api_key if pixeldrain_config and pixeldrain_config.api_key else ""
     
     @Property(int, notify=configChanged)
     def maxWorkers(self):
@@ -289,6 +322,26 @@ class Backend(QObject):
                 imgur_config = self.config_manager.config.hosts.get("Imgur")
                 if imgur_config:
                     imgur_config.access_token = config_dict["imgurAccessToken"]
+            
+            # Update API keys for new hosts
+            if "imgbbApiKey" in config_dict:
+                imgbb_config = self.config_manager.config.hosts.get("ImgBB")
+                if imgbb_config:
+                    imgbb_config.api_key = config_dict["imgbbApiKey"]
+                    imgbb_config.enabled = bool(config_dict["imgbbApiKey"])
+            
+            if "imageChestApiKey" in config_dict:
+                imagechest_config = self.config_manager.config.hosts.get("ImageChest")
+                if imagechest_config:
+                    imagechest_config.api_key = config_dict["imageChestApiKey"]
+                    imagechest_config.enabled = bool(config_dict["imageChestApiKey"])
+            
+            if "pixeldrainApiKey" in config_dict:
+                pixeldrain_config = self.config_manager.config.hosts.get("Pixeldrain")
+                if pixeldrain_config:
+                    pixeldrain_config.api_key = config_dict["pixeldrainApiKey"]
+                    # Pixeldrain can work without API key
+                    pixeldrain_config.enabled = True
             
             # Update worker settings for current host
             host_config = self.config_manager.config.hosts.get(self.config_manager.config.selected_host)

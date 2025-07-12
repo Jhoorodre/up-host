@@ -1336,6 +1336,141 @@ ApplicationWindow {
                                 }
                             }
                             
+                            // ImgBB Settings
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: hostCombo.currentText === "ImgBB"
+                                
+                                Label {
+                                    text: "ImgBB API Key"
+                                    font.pixelSize: 12
+                                    color: colorTertiary
+                                    opacity: 0.8
+                                }
+                                
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 32
+                                    color: colorPrimary
+                                    border.color: colorTertiary
+                                    border.width: 1
+                                    radius: 8
+                                    
+                                    TextField {
+                                        id: imgbbApiKeyField
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        text: backend.imgbbApiKey
+                                        placeholderText: "API Key do ImgBB"
+                                        color: colorTertiary
+                                        font.pixelSize: 11
+                                        background: Rectangle { color: "transparent" }
+                                        leftPadding: 8
+                                        rightPadding: 8
+                                    }
+                                }
+                            }
+                            
+                            // ImageChest Settings
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: hostCombo.currentText === "ImageChest"
+                                
+                                Label {
+                                    text: "ImageChest API Key"
+                                    font.pixelSize: 12
+                                    color: colorTertiary
+                                    opacity: 0.8
+                                }
+                                
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 32
+                                    color: colorPrimary
+                                    border.color: colorTertiary
+                                    border.width: 1
+                                    radius: 8
+                                    
+                                    TextField {
+                                        id: imageChestApiKeyField
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        text: backend.imageChestApiKey
+                                        placeholderText: "API Key do ImageChest"
+                                        color: colorTertiary
+                                        font.pixelSize: 11
+                                        background: Rectangle { color: "transparent" }
+                                        leftPadding: 8
+                                        rightPadding: 8
+                                    }
+                                }
+                            }
+                            
+                            // Pixeldrain Settings
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: hostCombo.currentText === "Pixeldrain"
+                                
+                                Label {
+                                    text: "Pixeldrain API Key (opcional)"
+                                    font.pixelSize: 12
+                                    color: colorTertiary
+                                    opacity: 0.8
+                                }
+                                
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 32
+                                    color: colorPrimary
+                                    border.color: colorTertiary
+                                    border.width: 1
+                                    radius: 8
+                                    
+                                    TextField {
+                                        id: pixeldrainApiKeyField
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        text: backend.pixeldrainApiKey
+                                        placeholderText: "API Key para recursos premium"
+                                        color: colorTertiary
+                                        font.pixelSize: 11
+                                        background: Rectangle { color: "transparent" }
+                                        leftPadding: 8
+                                        rightPadding: 8
+                                    }
+                                }
+                            }
+                            
+                            // Info labels for hosts without configuration
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: hostCombo.currentText === "Lensdump" || 
+                                        hostCombo.currentText === "Gofile" || 
+                                        hostCombo.currentText === "Imgbox"
+                                
+                                Label {
+                                    text: {
+                                        if (hostCombo.currentText === "Lensdump") 
+                                            return "✓ Lensdump está pronto para uso\nPreserva qualidade máxima de imagem"
+                                        else if (hostCombo.currentText === "Gofile") 
+                                            return "✓ Gofile está pronto para uso\nÓtimo para múltiplos arquivos"
+                                        else if (hostCombo.currentText === "Imgbox") 
+                                            return "✓ Imgbox está pronto para uso\nRequer biblioteca 'pyimgbox'"
+                                        else 
+                                            return ""
+                                    }
+                                    font.pixelSize: 12
+                                    color: colorTertiary
+                                    opacity: 0.8
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                            
                             // Performance Settings
                             RowLayout {
                                 Layout.fillWidth: true
@@ -1837,6 +1972,9 @@ ApplicationWindow {
                                     catboxUserhash: catboxUserhashField.text,
                                     imgurClientId: imgurClientIdField.text,
                                     imgurAccessToken: imgurAccessTokenField.text,
+                                    imgbbApiKey: imgbbApiKeyField.text,
+                                    imageChestApiKey: imageChestApiKeyField.text,
+                                    pixeldrainApiKey: pixeldrainApiKeyField.text,
                                     maxWorkers: maxWorkersSpinBox.value,
                                     rateLimit: rateLimitSpinBox.value,
                                     githubToken: githubTokenField.text,

@@ -52,6 +52,7 @@ cover/
 # Environment variables
 .env
 .venv
+.claude
 env/
 venv/
 ENV/
@@ -170,3 +171,6 @@ pyproject.toml
 
 # Arquivos de configuração de testes
 tests/__pycache__/
+manga_uploader_pro.egg-info
+
+

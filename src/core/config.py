@@ -9,9 +9,11 @@ class HostConfig(BaseModel):
     enabled: bool = True
     max_workers: int = Field(default=5, ge=1, le=20)
     rate_limit: float = Field(default=1.0, ge=0)
-    userhash: Optional[str] = ""
-    client_id: Optional[str] = ""
-    access_token: Optional[str] = ""
+    # Common fields
+    userhash: Optional[str] = ""  # Catbox
+    client_id: Optional[str] = ""  # Imgur
+    access_token: Optional[str] = ""  # Imgur
+    api_key: Optional[str] = ""  # ImgBB, ImageChest, Pixeldrain
 
 
 class AppConfig(BaseModel):
@@ -24,7 +26,13 @@ class AppConfig(BaseModel):
     
     hosts: Dict[str, HostConfig] = {
         "Catbox": HostConfig(),
-        "Imgur": HostConfig(enabled=False)
+        "Imgur": HostConfig(enabled=False),
+        "ImgBB": HostConfig(enabled=False),
+        "Lensdump": HostConfig(enabled=False),
+        "Pixeldrain": HostConfig(enabled=False),
+        "Gofile": HostConfig(enabled=False),
+        "ImageChest": HostConfig(enabled=False),
+        "Imgbox": HostConfig(enabled=False)
     }
     
     github: Dict[str, str] = {
@@ -61,7 +69,27 @@ class ConfigManager:
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    return AppConfig(**data)
+                    config = AppConfig(**data)
+                    
+                    # Ensure all default hosts are present
+                    default_hosts = {
+                        "Catbox": HostConfig(),
+                        "Imgur": HostConfig(enabled=False),
+                        "ImgBB": HostConfig(enabled=False),
+                        "Lensdump": HostConfig(enabled=False),
+                        "Pixeldrain": HostConfig(enabled=False),
+                        "Gofile": HostConfig(enabled=False),
+                        "ImageChest": HostConfig(enabled=False),
+                        "Imgbox": HostConfig(enabled=False)
+                    }
+                    
+                    # Add missing hosts
+                    for host_name, default_config in default_hosts.items():
+                        if host_name not in config.hosts:
+                            config.hosts[host_name] = default_config
+                            logger.debug(f"Added missing host config: {host_name}")
+                    
+                    return config
             except Exception as e:
                 logger.error(f"Failed to load config: {e}")
         
