@@ -1,30 +1,172 @@
-# Arquivo de ignorados do Git
-app-up.code-workspace
-*.pyc
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyo
-*.pyd
-*.pkl
-*.db
-*.sqlite3
-*.log
-*.env
-*.DS_Store
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
 *.egg-info/
+.installed.cfg
 *.egg
-*.zip
-*.tar.gz
-*.rar
-*.tar
-*.gz
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Environment variables
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Qt Creator
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+
+# Qt Linguist
+*.qm
+
+# Application specific
+*.log
+logs/
+config.json
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE files
+.vscode/
+.idea/
 *.swp
-*.bak
-*.tmp
-*.pid
-*.coverage
-*.idea/
-*.iml
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Workspace files
+app-up.code-workspace
 *.sublime-workspace
 *.sublime-project
-*.project
-*.classpath
+
+# Temporary files
+*.tmp
+*.bak
+*.pid
+
+# Build artifacts
+dist/
+*.exe
+
+# Test data
+test_manga/
+test_structure/
+
+# Outros arquivos e pastas comuns
+*.orig
+*.old
+*.backup
+*.log.*
+*.out
+*.err
+
+# Arquivos de lock de dependências
+Pipfile.lock
+poetry.lock
+
+# Arquivos de cache de notebook
+.ipynb_checkpoints/
+
+# Arquivos de configuração locais
+local_settings.py
+settings_local.py
+
+# Arquivos de dump
+*.dump
+*.dmp
+
+# Arquivos de upload temporário
+*.part
+*.upload
+
+# Arquivos de configuração de debug
+*.launch.json
+
+# Arquivos de configuração de build
+build.py
+
+# Arquivos de migração
+*.migrate
+
+# Arquivos de backup do editor
+*~
+*.bak
+*.tmp
+
+# Arquivos de lock do sistema
+.lock-wscript
+
+# Arquivos de configuração do Windows
+Thumbs.db
+desktop.ini
+
+# Arquivos de configuração do Mac
+.DS_Store
+
+# Arquivos de configuração do Linux
+*~
+
+# Arquivos de configuração do Python
+python*.dll
+python*.pyd
+
+# Arquivos de configuração do projeto
+pyproject.toml
+
+# Arquivos de configuração de testes
+tests/__pycache__/
