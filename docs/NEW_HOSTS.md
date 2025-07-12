@@ -36,7 +36,7 @@ Este documento descreve os novos hosts de imagem que foram implementados baseado
 - **Requer**: Nenhuma autenticação para uso básico
 - **Uso ideal**: Compartilhar múltiplos arquivos em uma galeria
 - **Álbuns**: Suportado nativamente
-- **Nota**: Retorna página de download, não link direto
+- **Nota**: ✅ Agora retorna links diretos! (com fallback para páginas de download)
 
 ### 5. ImageChest
 - **API**: Oficial (Estável)
@@ -99,10 +99,10 @@ pip install pyimgbox>=1.0.4  # Para Imgbox
 
 ## Limitações Conhecidas
 
-- **Gofile**: Retorna página de download, não link direto para imagem
-- **Imgbox**: Requer biblioteca adicional
-- **Rate Limits**: Cada host tem seus próprios limites
+- **Imgbox**: Requer biblioteca adicional (`pip install pyimgbox`)
+- **Rate Limits**: Cada host tem seus próprios limites  
 - **Álbuns**: Nem todos os hosts suportam criação de álbuns
+- **Gofile**: ✅ Agora com links diretos otimizados!
 
 ## Troubleshooting
 
@@ -129,7 +129,7 @@ pip install pyimgbox
 | Pixeldrain | Alta | Alta | Alta |
 | ImgBB | Alta | Média | Boa |
 | ImageChest | Média | Muito Alta | Alta |
-| Gofile | Média | Média | Boa |
+| Gofile | Média | Média | Boa ✅ |
 | Imgbox | Média | Alta | Boa |
 
 ## Próximos Passos

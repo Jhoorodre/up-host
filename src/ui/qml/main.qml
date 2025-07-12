@@ -1457,7 +1457,7 @@ ApplicationWindow {
                                         if (hostCombo.currentText === "Lensdump") 
                                             return "✓ Lensdump está pronto para uso\nPreserva qualidade máxima de imagem"
                                         else if (hostCombo.currentText === "Gofile") 
-                                            return "✓ Gofile está pronto para uso\nÓtimo para múltiplos arquivos"
+                                            return "✓ Gofile está pronto para uso\nÓtimo para múltiplos arquivos\n✅ Links diretos otimizados!"
                                         else if (hostCombo.currentText === "Imgbox") 
                                             return "✓ Imgbox está pronto para uso\nRequer biblioteca 'pyimgbox'"
                                         else 
