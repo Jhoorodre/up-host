@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "manga-uploader-pro"
+version = "1.0.0"
+description = "Modern manga uploader with async architecture"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+dependencies = [
+    "httpx>=0.25.0",
+    "aiofiles>=23.0.0", 
+    "pydantic>=2.0.0",
+    "loguru>=0.7.0",
+    "qasync>=0.27.0",
+    "PySide6>=6.5.0",
+    "PyYAML>=6.0",
+    "Pillow>=10.0.0",
+    "tenacity>=8.2.0",
+    "python-dotenv>=1.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "PyInstaller>=5.0"
+]
+
+[project.scripts]
+manga-uploader = "src.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 100
+target-version = ['py38']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
