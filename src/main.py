@@ -73,7 +73,31 @@ def main():
     finally:
         # Cleanup async services
         try:
-            loop.run_until_complete(backend.shutdown())
+            # Cancel all pending tasks first
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for backend shutdown
+            if pending:
+                try:
+                    loop.run_until_complete(asyncio.wait_for(
+                        backend.shutdown(), timeout=3.0
+                    ))
+                except asyncio.TimeoutError:
+                    logger.warning("Backend shutdown timed out")
+            
+            # Wait for remaining tasks to cleanup
+            if pending:
+                try:
+                    loop.run_until_complete(asyncio.wait_for(
+                        asyncio.gather(*pending, return_exceptions=True), 
+                        timeout=2.0
+                    ))
+                except asyncio.TimeoutError:
+                    logger.warning("Some tasks didn't complete during shutdown")
+                    
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
         

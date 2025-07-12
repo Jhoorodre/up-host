@@ -203,7 +203,7 @@ class Backend(QObject):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                asyncio.create_task(self.upload_queue.start())
+                asyncio.ensure_future(self.upload_queue.start())
             else:
                 # If no running loop, start queue synchronously
                 loop.run_until_complete(self.upload_queue.start())
@@ -771,7 +771,7 @@ class Backend(QObject):
             self.processingStarted.emit()
             
             # Add to queue
-            asyncio.create_task(self._queue_upload(selected_chapters))
+            asyncio.ensure_future(self._queue_upload(selected_chapters))
             
         except Exception as e:
             logger.error(f"Error in startUploadWithMetadata: {e}")
@@ -785,7 +785,7 @@ class Backend(QObject):
         )
         
         # Monitor job progress
-        asyncio.create_task(self._monitor_job(job_id))
+        asyncio.ensure_future(self._monitor_job(job_id))
     
     async def _monitor_job(self, job_id: str):
         """Monitor upload job progress"""
@@ -846,7 +846,7 @@ class Backend(QObject):
             github_config = self.config_manager.config.github
             if all([github_config.get("token"), github_config.get("repo")]):
                 logger.info("Auto-uploading metadata to GitHub...")
-                asyncio.create_task(self._upload_to_github(saved_json_path))
+                asyncio.ensure_future(self._upload_to_github(saved_json_path))
             else:
                 logger.debug("GitHub not configured, skipping auto-upload")
             
@@ -913,7 +913,7 @@ class Backend(QObject):
         logger.debug(f"Found JSON for GitHub upload: {json_file}")
         
         # Start GitHub upload
-        asyncio.create_task(self._upload_to_github(json_file))
+        asyncio.ensure_future(self._upload_to_github(json_file))
     
     async def _upload_to_github(self, json_file: Path):
         """Upload metadata file to GitHub"""
@@ -963,7 +963,7 @@ class Backend(QObject):
             return
         
         # Start async folder loading
-        asyncio.create_task(self._refresh_github_folders())
+        asyncio.ensure_future(self._refresh_github_folders())
     
     async def _refresh_github_folders(self):
         """Load all folders from GitHub repository recursively"""

@@ -56,16 +56,28 @@ class UploadQueue:
     
     async def stop(self):
         """Stop all workers gracefully"""
+        if not self.running:
+            return
+            
         self.running = False
+        logger.info("Stopping upload queue...")
         
-        # Add stop signals to queue
-        for _ in self.workers:
-            await self.queue.put(None)
+        # Cancel all workers
+        for worker in self.workers:
+            if not worker.done():
+                worker.cancel()
         
-        # Wait for workers to finish
-        await asyncio.gather(*self.workers, return_exceptions=True)
+        # Wait for workers to finish with timeout
+        if self.workers:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self.workers, return_exceptions=True),
+                    timeout=2.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Workers didn't stop within timeout, forcing shutdown")
+        
         self.workers.clear()
-        
         logger.info("Upload queue stopped")
     
     async def add_job(self, task: Callable, *args, **kwargs) -> str:
