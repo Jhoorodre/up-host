@@ -14,6 +14,7 @@ class HostConfig(BaseModel):
     client_id: Optional[str] = ""  # Imgur
     access_token: Optional[str] = ""  # Imgur
     api_key: Optional[str] = ""  # ImgBB, ImageChest, Pixeldrain
+    session_cookie: Optional[str] = ""  # Imgbox
 
 
 class AppConfig(BaseModel):

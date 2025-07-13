@@ -131,7 +131,19 @@ class JSONUpdater:
         try:
             # Create backup of existing file if it exists
             if output_path.exists():
-                backup_path = output_path.with_suffix('.json.backup')
+                import time
+                timestamp = int(time.time())
+                backup_path = output_path.with_suffix(f'.json.backup.{timestamp}')
+                
+                # Remove old backup if exists (keep only latest)
+                old_backup = output_path.with_suffix('.json.backup')
+                if old_backup.exists():
+                    try:
+                        old_backup.unlink()
+                        logger.debug(f"Removed old backup: {old_backup}")
+                    except Exception as e:
+                        logger.debug(f"Could not remove old backup: {e}")
+                
                 output_path.rename(backup_path)
                 logger.info(f"Created backup: {backup_path}")
             

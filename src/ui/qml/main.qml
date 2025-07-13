@@ -34,6 +34,19 @@ ApplicationWindow {
         backend.refreshMangaList()
     }
     
+    // Connect cookie test result signal
+    Connections {
+        target: backend
+        function onCookieTestResult(resultType, message) {
+            testCookieResult.text = message
+            if (resultType === "success") {
+                testCookieResult.color = colorSuccess
+            } else {
+                testCookieResult.color = "#ff4444"
+            }
+        }
+    }
+    
     header: Rectangle {
         height: 48
         color: colorSurface
@@ -334,7 +347,7 @@ ApplicationWindow {
                                             if (status === Image.Ready) {
                                                 console.log("QML: Cover loaded successfully for", model.title)
                                             } else if (status === Image.Error) {
-                                                console.log("QML: Cover failed to load for", model.title, "Error:", errorString)
+                                                console.log("QML: Cover failed to load for", model.title)
                                             } else if (status === Image.Loading) {
                                                 console.log("QML: Loading cover for", model.title)
                                             }
@@ -1444,13 +1457,93 @@ ApplicationWindow {
                                 }
                             }
                             
+                            // Imgbox Settings
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: hostCombo.currentText === "Imgbox"
+                                
+                                Label {
+                                    text: "Session Cookie (opcional)"
+                                    font.pixelSize: 12
+                                    color: colorSecondary
+                                }
+                                
+                                TextField {
+                                    id: imgboxSessionCookieField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Cole o cookie _imgbox_session para fazer upload na sua conta"
+                                    text: backend.imgboxSessionCookie
+                                    color: colorPrimary
+                                    font.pixelSize: 12
+                                    wrapMode: TextInput.Wrap
+                                    selectByMouse: true
+                                    
+                                    background: Rectangle {
+                                        color: colorSurface
+                                        border.color: colorSecondary
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                }
+                                
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    
+                                    Button {
+                                        id: testCookieBtn
+                                        text: "Testar Cookie"
+                                        enabled: imgboxSessionCookieField.text.length > 0
+                                        font.pixelSize: 10
+                                        
+                                        background: Rectangle {
+                                            color: testCookieBtn.enabled ? (testCookieBtn.hovered ? "#0078d4" : "#005a9e") : "#404040"
+                                            border.color: testCookieBtn.enabled ? "#0078d4" : "#606060"
+                                            border.width: 1
+                                            radius: 4
+                                        }
+                                        
+                                        contentItem: Text {
+                                            text: testCookieBtn.text
+                                            font: testCookieBtn.font
+                                            color: testCookieBtn.enabled ? "white" : "#808080"
+                                            horizontalAlignment: Text.AlignHCenter
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        
+                                        onClicked: {
+                                            testCookieResult.text = "Testando..."
+                                            testCookieResult.color = colorTertiary
+                                            backend.testImgboxCookie(imgboxSessionCookieField.text)
+                                        }
+                                    }
+                                    
+                                    Label {
+                                        id: testCookieResult
+                                        text: ""
+                                        font.pixelSize: 10
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+                                
+                                Label {
+                                    text: "Para fazer upload na sua conta:\n1. Faça login no imgbox.com/upload\n2. Abra Dev Tools (F12) → Application → Cookies\n3. Copie o valor do cookie '_imgbox_session'"
+                                    font.pixelSize: 10
+                                    color: colorTertiary
+                                    opacity: 0.7
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                            
                             // Info labels for hosts without configuration
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: 8
                                 visible: hostCombo.currentText === "Lensdump" || 
-                                        hostCombo.currentText === "Gofile" || 
-                                        hostCombo.currentText === "Imgbox"
+                                        hostCombo.currentText === "Gofile"
                                 
                                 Label {
                                     text: {
@@ -1458,8 +1551,6 @@ ApplicationWindow {
                                             return "✓ Lensdump está pronto para uso\nPreserva qualidade máxima de imagem"
                                         else if (hostCombo.currentText === "Gofile") 
                                             return "✓ Gofile está pronto para uso\nÓtimo para múltiplos arquivos\n✅ Links diretos otimizados!"
-                                        else if (hostCombo.currentText === "Imgbox") 
-                                            return "✓ Imgbox está pronto para uso\nRequer biblioteca 'pyimgbox'"
                                         else 
                                             return ""
                                     }
@@ -1975,6 +2066,7 @@ ApplicationWindow {
                                     imgbbApiKey: imgbbApiKeyField.text,
                                     imageChestApiKey: imageChestApiKeyField.text,
                                     pixeldrainApiKey: pixeldrainApiKeyField.text,
+                                    imgboxSessionCookie: imgboxSessionCookieField.text,
                                     maxWorkers: maxWorkersSpinBox.value,
                                     rateLimit: rateLimitSpinBox.value,
                                     githubToken: githubTokenField.text,
@@ -2030,12 +2122,8 @@ ApplicationWindow {
         function openForUpload() {
             isEditMode = false
             if (window.currentManga) {
-                titleField.text = window.currentManga.title || ""
-                descriptionField.text = ""
-                artistField.text = ""
-                authorField.text = ""
-                coverField.text = ""
-                statusCombo.currentIndex = 0
+                // Carregar metadados existentes se disponível
+                backend.loadExistingMetadata(window.currentManga.title)
             }
             open()
         }
@@ -2053,19 +2141,18 @@ ApplicationWindow {
                 console.log("onMetadataLoaded called - metadata:", JSON.stringify(metadata))
                 console.log("Dialog visible:", metadataDialog.visible, "isEditMode:", metadataDialog.isEditMode)
                 
-                if (metadataDialog.isEditMode) {
-                    titleField.text = metadata.title || ""
-                    descriptionField.text = metadata.description || ""
-                    artistField.text = metadata.artist || ""
-                    authorField.text = metadata.author || ""
-                    coverField.text = metadata.cover || ""
-                    
-                    var statusList = ["Em Andamento", "Completo", "Pausado", "Cancelado", "Hiato"]
-                    var statusIndex = statusList.indexOf(metadata.status || "Em Andamento")
-                    statusCombo.currentIndex = statusIndex >= 0 ? statusIndex : 0
-                    
-                    console.log("Fields updated - title:", titleField.text)
-                }
+                // Funciona tanto para upload quanto para editar
+                titleField.text = metadata.title || ""
+                descriptionField.text = metadata.description || ""
+                artistField.text = metadata.artist || ""
+                authorField.text = metadata.author || ""
+                coverField.text = metadata.cover || ""
+                
+                var statusList = ["Em Andamento", "Completo", "Pausado", "Cancelado", "Hiato"]
+                var statusIndex = statusList.indexOf(metadata.status || "Em Andamento")
+                statusCombo.currentIndex = statusIndex >= 0 ? statusIndex : 0
+                
+                console.log("Fields updated - title:", titleField.text, "mode:", metadataDialog.isEditMode ? "edit" : "upload")
             }
         }
         

@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "WebFetch(domain:codeberg.org)",
+      "WebFetch(domain:github.com)",
+      "Bash(pip show:*)",
+      "Bash(python -m pip show:*)",
+      "WebFetch(domain:upsies.readthedocs.io)",
+      "Bash(find:*)"
     ],
     "deny": []
   }
