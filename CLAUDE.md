@@ -86,6 +86,12 @@ python build.py
 New upload providers should extend `BaseHost` in `src/core/hosts/base.py`. Current implementations:
 - **Catbox**: Anonymous and authenticated uploads
 - **Imgur**: OAuth2-based uploads (requires client_id)
+- **ImgBB**: API key-based uploads
+- **Gofile**: Anonymous uploads with direct links
+- **Pixeldrain**: Anonymous uploads
+- **Lensdump**: API key-based uploads
+- **ImageChest**: Anonymous uploads
+- **Imgbox**: Anonymous uploads with session cookie support
 
 ## Configuration
 
@@ -125,6 +131,9 @@ Root Folder/
 - ✅ Chapter selection model properly implemented
 - ✅ GitHub upload functionality integrated
 - ✅ Async image uploading with proper error handling
+- ✅ Added support for 8 image hosting providers
+- ✅ Implemented session cookie support for Imgbox
+- ✅ Added direct link optimization for Gofile
 
 ## Development Notes
 
@@ -132,4 +141,16 @@ Root Folder/
 - Qt 6.5+ required for QML features
 - Async operations must respect Qt's threading model
 - Configuration changes require `_init_hosts()` call to reload providers
-- Run `python create_test_structure.py` to create test manga structure
+### Host-Specific Implementation Details
+- All hosts extend `BaseHost` with required methods: `upload_image()` and `create_album()`
+- Rate limiting configured per host via `rate_limit` and `max_workers` settings
+- Upload results use standardized `UploadResult` and `ChapterUploadResult` models
+- Session management handled individually (e.g., Imgbox cookie testing)
+- Direct link optimization available for compatible hosts (Gofile)
+
+### Adding New Hosts
+1. Create new file in `src/core/hosts/`
+2. Extend `BaseHost` class
+3. Implement `upload_image()` and `create_album()` methods
+4. Add host configuration to `src/core/config.py`
+5. Register host in `src/core/hosts/__init__.py`
