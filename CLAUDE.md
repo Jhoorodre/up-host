@@ -92,6 +92,8 @@ New upload providers should extend `BaseHost` in `src/core/hosts/base.py`. Curre
 - **Lensdump**: API key-based uploads
 - **ImageChest**: Anonymous uploads
 - **Imgbox**: Anonymous uploads with session cookie support
+- **ImgHippo**: API v1 uploads with API key authentication
+- **ImgPile**: REST API uploads with optional API key
 
 ## Configuration
 
@@ -131,9 +133,11 @@ Root Folder/
 - ✅ Chapter selection model properly implemented
 - ✅ GitHub upload functionality integrated
 - ✅ Async image uploading with proper error handling
-- ✅ Added support for 8 image hosting providers
+- ✅ Added support for 10 image hosting providers
 - ✅ Implemented session cookie support for Imgbox
 - ✅ Added direct link optimization for Gofile
+- ✅ Added ImgHippo with official API v1 support
+- ✅ Added ImgPile with REST API and base64 fallback
 
 ## Development Notes
 

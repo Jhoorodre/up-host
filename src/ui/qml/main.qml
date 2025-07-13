@@ -1538,6 +1538,119 @@ ApplicationWindow {
                                 }
                             }
                             
+                            // ImgHippo Settings
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: hostCombo.currentText === "ImgHippo"
+                                
+                                Label {
+                                    text: "API Key (obrigatória)"
+                                    font.pixelSize: 12
+                                    color: colorSecondary
+                                }
+                                
+                                TextField {
+                                    id: imghippoApiKeyField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Insira sua chave de API do ImgHippo"
+                                    text: backend.imghippoApiKey
+                                    color: colorPrimary
+                                    font.pixelSize: 12
+                                    selectByMouse: true
+                                    echoMode: TextInput.Password
+                                    
+                                    background: Rectangle {
+                                        color: colorSurface
+                                        border.color: colorSecondary
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                    
+                                    onTextChanged: backend.setImgHippoApiKey(text)
+                                }
+                                
+                                Label {
+                                    text: "Como obter API Key:\n1. Acesse imghippo.com\n2. Faça login ou crie uma conta\n3. Vá em 'Get API Key' para gerar sua chave\n4. Cole a chave acima"
+                                    font.pixelSize: 10
+                                    color: colorTertiary
+                                    opacity: 0.7
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                            
+                            // ImgPile Settings
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: hostCombo.currentText === "ImgPile"
+                                
+                                Label {
+                                    text: "URL Base"
+                                    font.pixelSize: 12
+                                    color: colorSecondary
+                                }
+                                
+                                TextField {
+                                    id: imgpileBaseUrlField
+                                    Layout.fillWidth: true
+                                    placeholderText: "https://imgpile.com"
+                                    color: colorPrimary
+                                    font.pixelSize: 12
+                                    selectByMouse: true
+                                    
+                                    background: Rectangle {
+                                        color: colorSurface
+                                        border.color: colorSecondary
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                    
+                                    Component.onCompleted: text = backend.imgpileBaseUrl
+                                    onTextChanged: {
+                                        if (text !== backend.imgpileBaseUrl) {
+                                            backend.setImgPileBaseUrl(text)
+                                        }
+                                    }
+                                }
+                                
+                                Label {
+                                    text: "API Key (opcional)"
+                                    font.pixelSize: 12
+                                    color: colorSecondary
+                                }
+                                
+                                TextField {
+                                    id: imgpileApiKeyField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Chave de API (se necessária)"
+                                    text: backend.imgpileApiKey
+                                    color: colorPrimary
+                                    font.pixelSize: 12
+                                    selectByMouse: true
+                                    echoMode: TextInput.Password
+                                    
+                                    background: Rectangle {
+                                        color: colorSurface
+                                        border.color: colorSecondary
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                    
+                                    onTextChanged: backend.setImgPileApiKey(text)
+                                }
+                                
+                                Label {
+                                    text: "✓ ImgPile permite uploads anônimos\nURL padrão: imgpile.com\nPersonalize se usando instância própria"
+                                    font.pixelSize: 10
+                                    color: colorTertiary
+                                    opacity: 0.7
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                            
                             // Info labels for hosts without configuration
                             ColumnLayout {
                                 Layout.fillWidth: true
@@ -2110,7 +2223,7 @@ ApplicationWindow {
     Dialog {
         id: metadataDialog
         width: 480
-        height: 560
+        height: 600
         anchors.centerIn: parent
         
         Material.theme: Material.Dark
@@ -2146,6 +2259,7 @@ ApplicationWindow {
                 descriptionField.text = metadata.description || ""
                 artistField.text = metadata.artist || ""
                 authorField.text = metadata.author || ""
+                groupField.text = metadata.group || ""
                 coverField.text = metadata.cover || ""
                 
                 var statusList = ["Em Andamento", "Completo", "Pausado", "Cancelado", "Hiato"]
@@ -2284,6 +2398,27 @@ ApplicationWindow {
                         radius: 8
                         
                         TextField {
+                            id: groupField
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            placeholderText: "Grupo de tradução (opcional)"
+                            color: colorTertiary
+                            font.pixelSize: 12
+                            background: Rectangle { color: "transparent" }
+                            leftPadding: 8
+                            rightPadding: 8
+                        }
+                    }
+                    
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: 32
+                        color: colorPrimary
+                        border.color: colorTertiary
+                        border.width: 1
+                        radius: 8
+                        
+                        TextField {
                             id: coverField
                             anchors.fill: parent
                             anchors.margins: 1
@@ -2389,6 +2524,7 @@ ApplicationWindow {
                                 description: backend.makeJsonSafe(descriptionField.text || ""),
                                 artist: backend.makeJsonSafe(artistField.text || ""),
                                 author: backend.makeJsonSafe(authorField.text || ""),
+                                group: backend.makeJsonSafe(groupField.text || ""),
                                 cover: coverField.text || "",
                                 status: statusCombo.currentText || "Em Andamento"
                             }

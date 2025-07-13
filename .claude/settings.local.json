@@ -7,7 +7,12 @@
       "Bash(pip show:*)",
       "Bash(python -m pip show:*)",
       "WebFetch(domain:upsies.readthedocs.io)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "WebFetch(domain:www.imghippo.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:imgpile.com)",
+      "WebFetch(domain:forum.ui.vision)",
+      "Bash(python:*)"
     ],
     "deny": []
   }

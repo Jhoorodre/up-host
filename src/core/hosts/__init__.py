@@ -7,6 +7,8 @@ from .pixeldrain import PixeldrainHost
 from .gofile import GofileHost
 from .imagechest import ImageChestHost
 from .imgbox import ImgboxHost
+from .imghippo import ImgHippoHost
+from .imgpile import ImgPileHost
 
 __all__ = [
     'BaseHost', 
@@ -17,5 +19,7 @@ __all__ = [
     'PixeldrainHost',
     'GofileHost',
     'ImageChestHost',
-    'ImgboxHost'
+    'ImgboxHost',
+    'ImgHippoHost',
+    'ImgPileHost'
 ]

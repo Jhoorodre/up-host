@@ -13,8 +13,9 @@ class HostConfig(BaseModel):
     userhash: Optional[str] = ""  # Catbox
     client_id: Optional[str] = ""  # Imgur
     access_token: Optional[str] = ""  # Imgur
-    api_key: Optional[str] = ""  # ImgBB, ImageChest, Pixeldrain
+    api_key: Optional[str] = ""  # ImgBB, ImageChest, Pixeldrain, ImgHippo, ImgPile
     session_cookie: Optional[str] = ""  # Imgbox
+    base_url: Optional[str] = ""  # ImgPile custom instances
 
 
 class AppConfig(BaseModel):
@@ -33,7 +34,9 @@ class AppConfig(BaseModel):
         "Pixeldrain": HostConfig(enabled=False),
         "Gofile": HostConfig(enabled=False),
         "ImageChest": HostConfig(enabled=False),
-        "Imgbox": HostConfig(enabled=False)
+        "Imgbox": HostConfig(enabled=False),
+        "ImgHippo": HostConfig(enabled=False),
+        "ImgPile": HostConfig(enabled=False, base_url="https://imgpile.com")
     }
     
     github: Dict[str, str] = {
@@ -81,7 +84,9 @@ class ConfigManager:
                         "Pixeldrain": HostConfig(enabled=False),
                         "Gofile": HostConfig(enabled=False),
                         "ImageChest": HostConfig(enabled=False),
-                        "Imgbox": HostConfig(enabled=False)
+                        "Imgbox": HostConfig(enabled=False),
+                        "ImgHippo": HostConfig(enabled=False),
+                        "ImgPile": HostConfig(enabled=False, base_url="https://imgpile.com")
                     }
                     
                     # Add missing hosts

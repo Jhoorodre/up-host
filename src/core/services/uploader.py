@@ -103,6 +103,7 @@ class MangaUploaderService:
                 "description": custom_metadata.get("description", manga.description),
                 "artist": custom_metadata.get("artist", manga.artist),
                 "author": custom_metadata.get("author", manga.author),
+                "group": custom_metadata.get("group", ""),
                 "cover": custom_metadata.get("cover", manga.cover_url),
                 "status": custom_metadata.get("status", manga.status.value),
                 "chapters": new_chapters_data
@@ -113,6 +114,7 @@ class MangaUploaderService:
                 "description": manga.description,
                 "artist": manga.artist,
                 "author": manga.author,
+                "group": "",
                 "cover": manga.cover_url,
                 "status": manga.status.value,
                 "chapters": new_chapters_data

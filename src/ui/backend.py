@@ -37,7 +37,8 @@ class Backend(QObject):
         self._upload_progress = 0.0
         self._available_hosts = [
             "Catbox", "Imgur", "ImgBB", "Lensdump", 
-            "Pixeldrain", "Gofile", "ImageChest", "Imgbox"
+            "Pixeldrain", "Gofile", "ImageChest", "Imgbox",
+            "ImgHippo", "ImgPile"
         ]
         self.manga_model = MangaListModel(self)
         self.chapter_model = ChapterListModel(self)
@@ -72,7 +73,9 @@ class Backend(QObject):
             "Pixeldrain": ("PixeldrainHost", None),
             "Gofile": ("GofileHost", None),
             "ImageChest": ("ImageChestHost", None),
-            "Imgbox": ("ImgboxHost", None)
+            "Imgbox": ("ImgboxHost", None),
+            "ImgHippo": ("ImgHippoHost", None),
+            "ImgPile": ("ImgPileHost", None)
         }
         
         for host_name, (class_name, host_class) in host_classes.items():
@@ -83,7 +86,7 @@ class Backend(QObject):
                         # Dynamic import
                         from core.hosts import (
                             ImgurHost, ImgBBHost, LensdumpHost, PixeldrainHost,
-                            GofileHost, ImageChestHost, ImgboxHost
+                            GofileHost, ImageChestHost, ImgboxHost, ImgHippoHost, ImgPileHost
                         )
                         host_class = locals()[class_name]
                     
@@ -158,6 +161,21 @@ class Backend(QObject):
         imgbox_config = self.config_manager.config.hosts.get("Imgbox")
         return imgbox_config.session_cookie if imgbox_config and imgbox_config.session_cookie else ""
     
+    @Property(str, notify=configChanged)
+    def imghippoApiKey(self):
+        imghippo_config = self.config_manager.config.hosts.get("ImgHippo")
+        return imghippo_config.api_key if imghippo_config and imghippo_config.api_key else ""
+    
+    @Property(str, notify=configChanged)
+    def imgpileApiKey(self):
+        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
+        return imgpile_config.api_key if imgpile_config and imgpile_config.api_key else ""
+    
+    @Property(str, notify=configChanged)
+    def imgpileBaseUrl(self):
+        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
+        return imgpile_config.base_url if imgpile_config and imgpile_config.base_url else "https://imgpile.com"
+    
     @Property(int, notify=configChanged)
     def maxWorkers(self):
         host_config = self.config_manager.config.hosts.get(self.config_manager.config.selected_host)
@@ -218,6 +236,10 @@ class Backend(QObject):
     @Property(str, notify=mangaInfoChanged)
     def currentMangaAuthor(self):
         return self._manga_info.get("author", "")
+    
+    @Property(str, notify=mangaInfoChanged)
+    def currentMangaGroup(self):
+        return self._manga_info.get("group", "")
     
     @Property(str, notify=mangaInfoChanged)
     def currentMangaCover(self):
@@ -783,6 +805,36 @@ class Backend(QObject):
             self.config_manager.save_config()
             self.selectedHostIndexChanged.emit()
     
+    @Slot(str)
+    def setImgHippoApiKey(self, api_key: str):
+        """Set ImgHippo API key"""
+        imghippo_config = self.config_manager.config.hosts.get("ImgHippo")
+        if imghippo_config:
+            imghippo_config.api_key = api_key.strip()
+            self.config_manager.save_config()
+            self._init_hosts()
+            self.configChanged.emit()
+    
+    @Slot(str)
+    def setImgPileApiKey(self, api_key: str):
+        """Set ImgPile API key"""
+        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
+        if imgpile_config:
+            imgpile_config.api_key = api_key.strip()
+            self.config_manager.save_config()
+            self._init_hosts()
+            self.configChanged.emit()
+    
+    @Slot(str)
+    def setImgPileBaseUrl(self, base_url: str):
+        """Set ImgPile base URL"""
+        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
+        if imgpile_config:
+            imgpile_config.base_url = base_url.strip() or "https://imgpile.com"
+            self.config_manager.save_config()
+            self._init_hosts()
+            self.configChanged.emit()
+    
     @Slot()
     def startUpload(self):
         """Start uploading selected chapters (legacy method)"""
@@ -1225,6 +1277,7 @@ class Backend(QObject):
                     "description": "",
                     "artist": "",
                     "author": "",
+                    "group": "",
                     "cover": "",
                     "status": "Em Andamento"
                 }
@@ -1356,6 +1409,7 @@ class Backend(QObject):
                 data["description"] = metadata_dict.get("description", "")
                 data["artist"] = metadata_dict.get("artist", "")
                 data["author"] = metadata_dict.get("author", "")
+                data["group"] = metadata_dict.get("group", "")
                 data["cover"] = metadata_dict.get("cover", "")
                 data["status"] = metadata_dict.get("status", "Em Andamento")
                 
@@ -1372,7 +1426,55 @@ class Backend(QObject):
                 
                 self.processingFinished.emit()  # Reuse signal for success
             else:
-                self.error.emit("Arquivo de metadados não encontrado para edição")
+                # Create new JSON file
+                logger.info(f"Creating new JSON file for: {self._current_manga.title}")
+                
+                try:
+                    # Create the output folder if it doesn't exist
+                    output_folder = self.config_manager.config.output_folder
+                    manga_folder = output_folder / self._current_manga.title
+                    logger.debug(f"Creating manga folder: {manga_folder}")
+                    manga_folder.mkdir(parents=True, exist_ok=True)
+                    
+                    # Create sanitized filename
+                    sanitized_title = sanitize_filename(self._current_manga.title, is_file=True, remove_accents=True)
+                    if not sanitized_title.endswith('.json'):
+                        sanitized_title += '.json'
+                    
+                    new_json_file = manga_folder / sanitized_title
+                    logger.debug(f"Creating JSON file: {new_json_file}")
+                    
+                    # Create new metadata structure
+                    new_data = {
+                        "title": metadata_dict.get("title", ""),
+                        "description": metadata_dict.get("description", ""),
+                        "artist": metadata_dict.get("artist", ""),
+                        "author": metadata_dict.get("author", ""),
+                        "group": metadata_dict.get("group", ""),
+                        "cover": metadata_dict.get("cover", ""),
+                        "status": metadata_dict.get("status", "Em Andamento"),
+                        "chapters": {}  # Empty chapters for now
+                    }
+                    
+                    # Save new JSON file
+                    with open(new_json_file, 'w', encoding='utf-8') as f:
+                        json.dump(new_data, f, indent=2, ensure_ascii=False)
+                    
+                    logger.success(f"New metadata file created: {new_json_file}")
+                    
+                    # Reload manga info to reflect changes
+                    if self._current_manga:
+                        folder_chapters = self.chapter_model.rowCount()
+                        self._loadMangaInfo(self._current_manga.title, folder_chapters)
+                    
+                    # Refresh manga list to show the new JSON status
+                    self.refreshMangaList()
+                    
+                    self.processingFinished.emit()  # Reuse signal for success
+                    
+                except Exception as create_error:
+                    logger.error(f"Error creating new JSON file: {create_error}")
+                    self.error.emit(f"Erro ao criar arquivo de metadados: {str(create_error)}")
                 
         except Exception as e:
             logger.error(f"Error in updateExistingMetadata: {e}")
