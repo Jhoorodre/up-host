@@ -55,6 +55,7 @@ class Backend(QObject):
             "author": "",
             "cover": "",
             "status": "",
+            "group": "",
             "chapterCount": 0,
             "hasJson": False
         }
@@ -652,7 +653,7 @@ class Backend(QObject):
             
             # Update chapter list
             chapters = []
-            for chapter_dir in sorted(path.iterdir()):
+            for chapter_dir in sorted(path.iterdir(), reverse=True):
                 if chapter_dir.is_dir():
                     # Count images
                     image_count = sum(1 for f in chapter_dir.iterdir() 
@@ -761,6 +762,7 @@ class Backend(QObject):
                     "author": data.get("author", ""),
                     "cover": data.get("cover", ""),
                     "status": data.get("status", ""),
+                    "group": data.get("group", ""),
                     "chapterCount": len(data.get("chapters", {})),
                     "hasJson": True
                 }
@@ -774,6 +776,7 @@ class Backend(QObject):
                     "author": "",
                     "cover": "",
                     "status": "",
+                    "group": "",
                     "chapterCount": folder_chapter_count,
                     "hasJson": False
                 }
@@ -1533,6 +1536,24 @@ class Backend(QObject):
         # Use QTimer to run test without blocking
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, run_test)
+    
+    @Slot()
+    def selectAllChapters(self):
+        """Select all chapters in the current manga"""
+        if self.chapter_model:
+            self.chapter_model.selectAll()
+    
+    @Slot()
+    def unselectAllChapters(self):
+        """Unselect all chapters in the current manga"""
+        if self.chapter_model:
+            self.chapter_model.unselectAll()
+    
+    @Slot()
+    def toggleChapterOrder(self):
+        """Toggle chapter order between ascending and descending"""
+        if self.chapter_model:
+            self.chapter_model.toggleOrder()
     
     async def shutdown(self):
         """Gracefully shutdown all async services"""

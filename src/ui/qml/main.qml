@@ -645,6 +645,15 @@ ApplicationWindow {
                                         color: colorTertiary
                                         opacity: 0.6
                                     }
+                                    
+                                    Label {
+                                        text: "GRUPO: " + (backend.currentMangaGroup || "—")
+                                        font.pixelSize: 9
+                                        font.weight: Font.Medium
+                                        font.letterSpacing: 0.5
+                                        color: colorTertiary
+                                        opacity: 0.6
+                                    }
                                 }
                                 
                                 Label {
@@ -669,6 +678,126 @@ ApplicationWindow {
                                 font.letterSpacing: 1
                                 color: colorTertiary
                                 opacity: 0.8
+                            }
+                            
+                            // Chapter Control Buttons
+                            GridLayout {
+                                columns: 2
+                                columnSpacing: 6
+                                rowSpacing: 6
+                                Layout.fillWidth: true
+                                
+                                // Select All Button
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 32
+                                    color: selectAllMouseArea.containsMouse ? colorSecondary : colorSurface
+                                    border.color: selectAllMouseArea.containsMouse ? colorSecondary : colorTertiary
+                                    border.width: 1
+                                    radius: 6
+                                    
+                                    RowLayout {
+                                        anchors.centerIn: parent
+                                        spacing: 6
+                                        
+                                        Text {
+                                            text: "✓"
+                                            font.pixelSize: 12
+                                            font.weight: Font.Bold
+                                            color: selectAllMouseArea.containsMouse ? colorPrimary : colorSecondary
+                                        }
+                                        
+                                        Label {
+                                            text: "Todos"
+                                            font.pixelSize: 10
+                                            font.weight: Font.Medium
+                                            color: selectAllMouseArea.containsMouse ? colorPrimary : colorTertiary
+                                        }
+                                    }
+                                    
+                                    MouseArea {
+                                        id: selectAllMouseArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        onClicked: backend.selectAllChapters()
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+                                }
+                                
+                                // Unselect All Button
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 32
+                                    color: unselectAllMouseArea.containsMouse ? "#ff4444" : colorSurface
+                                    border.color: unselectAllMouseArea.containsMouse ? "#ff4444" : colorTertiary
+                                    border.width: 1
+                                    radius: 6
+                                    
+                                    RowLayout {
+                                        anchors.centerIn: parent
+                                        spacing: 6
+                                        
+                                        Text {
+                                            text: "✕"
+                                            font.pixelSize: 12
+                                            font.weight: Font.Bold
+                                            color: unselectAllMouseArea.containsMouse ? colorPrimary : "#ff4444"
+                                        }
+                                        
+                                        Label {
+                                            text: "Nenhum"
+                                            font.pixelSize: 10
+                                            font.weight: Font.Medium
+                                            color: unselectAllMouseArea.containsMouse ? colorPrimary : colorTertiary
+                                        }
+                                    }
+                                    
+                                    MouseArea {
+                                        id: unselectAllMouseArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        onClicked: backend.unselectAllChapters()
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+                                }
+                                
+                                // Toggle Order Button (spans both columns)
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 32
+                                    Layout.columnSpan: 2
+                                    color: toggleOrderMouseArea.containsMouse ? colorWarning : colorSurface
+                                    border.color: toggleOrderMouseArea.containsMouse ? colorWarning : colorTertiary
+                                    border.width: 1
+                                    radius: 6
+                                    
+                                    RowLayout {
+                                        anchors.centerIn: parent
+                                        spacing: 8
+                                        
+                                        Text {
+                                            text: "⇅"
+                                            font.pixelSize: 14
+                                            font.weight: Font.Bold
+                                            color: toggleOrderMouseArea.containsMouse ? colorPrimary : colorWarning
+                                        }
+                                        
+                                        Label {
+                                            text: "Inverter Ordem"
+                                            font.pixelSize: 10
+                                            font.weight: Font.Medium
+                                            color: toggleOrderMouseArea.containsMouse ? colorPrimary : colorTertiary
+                                        }
+                                    }
+                                    
+                                    MouseArea {
+                                        id: toggleOrderMouseArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        onClicked: backend.toggleChapterOrder()
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+                                }
                             }
                             
                             ScrollView {

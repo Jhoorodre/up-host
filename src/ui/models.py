@@ -120,6 +120,31 @@ class ChapterListModel(QAbstractListModel):
         self._chapters = []
         self._selected.clear()
         self.endResetModel()
+    
+    def selectAll(self):
+        """Select all chapters"""
+        for chapter in self._chapters:
+            self._selected.add(chapter["name"])
+        # Emit data changed for all items
+        if self._chapters:
+            top_left = self.index(0, 0)
+            bottom_right = self.index(len(self._chapters) - 1, 0)
+            self.dataChanged.emit(top_left, bottom_right, [self.SelectedRole])
+    
+    def unselectAll(self):
+        """Unselect all chapters"""
+        self._selected.clear()
+        # Emit data changed for all items
+        if self._chapters:
+            top_left = self.index(0, 0)
+            bottom_right = self.index(len(self._chapters) - 1, 0)
+            self.dataChanged.emit(top_left, bottom_right, [self.SelectedRole])
+    
+    def toggleOrder(self):
+        """Toggle chapter order between ascending and descending"""
+        self.beginResetModel()
+        self._chapters.reverse()
+        self.endResetModel()
 
 
 class GitHubFolderListModel(QAbstractListModel):
