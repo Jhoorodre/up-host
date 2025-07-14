@@ -3,6 +3,13 @@ from typing import List, Dict, Optional
 from enum import Enum
 from pathlib import Path
 
+# Import indexador models
+from .indexador import (
+    IndexadorConfig, IndexadorData, IndexadorState,
+    Hub as HubInfo, Series as SeriesInfo, Data as SeriesData, SocialPlatform,
+    Statistics, Technical, Legal, Features
+)
+
 
 class MangaStatus(str, Enum):
     ONGOING = "Em Andamento"

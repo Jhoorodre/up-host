@@ -1,0 +1,89 @@
+{
+  "v": "2.1",
+  "updated": "2025-01-01",
+  "hub": {
+    "id": "hub-alpha-001",
+    "name": "Projeto A",
+    "cover": "https://example.com/assets/hub-main-cover.jpg",
+    "desc": "Um grupo dedicado à preservação e distribuição de conhecimento. Nosso trabalho é feito por voluntários apaixonados pelo que fazem.",
+    "disclaimer": "O conteúdo é fornecido como está. Sempre apoie os criadores originais por meios oficiais.",
+    "lang": "xx-XX",
+    "repo": "https://example.com/repo/project-alpha"
+  },
+  "social": [
+    {
+      "type": "discord",
+      "url": "https://example.com/social/discord-server",
+      "primary": true
+    },
+    {
+      "type": "telegram",
+      "url": "https://example.com/social/telegram-channel"
+    },
+    {
+      "type": "whatsapp",
+      "url": "https://example.com/social/whatsapp-group"
+    },
+    {
+      "type": "twitter",
+      "url": "https://example.com/social/twitter-profile"
+    }
+  ],
+  "featured": [
+    {
+      "id": "work-alpha-001",
+      "title": "Crônicas do Setor 7 - Parte 1",
+      "slug": "cronicas-setor7-p1",
+      "cover": "https://example.com/assets/work-001-cover.jpg",
+      "status": "completed",
+      "chapters": 78,
+      "rating": 4.8,
+      "url": "https://example.com/cdn/works/work-001.json",
+      "priority": 1
+    },
+    {
+      "id": "work-alpha-002",
+      "title": "Crônicas do Setor 7 - Parte 2",
+      "slug": "cronicas-setor7-p2",
+      "cover": "https://example.com/assets/work-002-cover.jpg",
+      "status": "ongoing",
+      "chapters": 337,
+      "rating": 4.9,
+      "url": "https://example.com/cdn/works/work-002.json",
+      "priority": 2
+    },
+    {
+      "id": "work-beta-001",
+      "title": "Lendas do Andar Zero",
+      "slug": "lendas-andar-zero",
+      "cover": "https://example.com/assets/work-beta-001-cover.jpg",
+      "status": "completed",
+      "chapters": 11,
+      "rating": 4.7,
+      "url": "https://example.com/cdn/works/work-beta-001.json",
+      "priority": 3
+    },
+    {
+      "id": "work-alpha-003",
+      "title": "Crônicas do Setor 7 - Parte 3",
+      "slug": "cronicas-setor7-p3",
+      "cover": "https://example.com/assets/work-003-cover.jpg",
+      "status": "ongoing",
+      "chapters": 45,
+      "rating": 4.8,
+      "url": "https://example.com/cdn/works/work-003.json",
+      "priority": 4,
+      "latest": true
+    }
+  ],
+  "api": {
+    "all_works": "https://example.com/cdn/api/all_works.json",
+    "search": "https://example.com/cdn/api/search.json",
+    "base_url": "https://example.com/cdn/"
+  },
+  "stats": {
+    "total_works": 4,
+    "total_chapters": 471,
+    "avg_rating": 4.8
+  }
+}

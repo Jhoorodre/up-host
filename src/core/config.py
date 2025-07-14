@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from loguru import logger
+from .models.indexador import IndexadorConfig
 
 
 class HostConfig(BaseModel):
@@ -46,6 +47,8 @@ class AppConfig(BaseModel):
         "branch": "main",
         "folder": "metadata"  # Default folder for JSON files
     }
+    
+    indexador: IndexadorConfig = Field(default_factory=IndexadorConfig)
 
 
 class ConfigManager:

@@ -12,7 +12,12 @@
       "WebFetch(domain:gist.github.com)",
       "WebFetch(domain:imgpile.com)",
       "WebFetch(domain:forum.ui.vision)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(cd:*)",
+      "Bash(pip install:*)",
+      "Bash(cp:*)"
     ],
     "deny": []
   }

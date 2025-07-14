@@ -8,31 +8,45 @@ from loguru import logger
 class GitHubService:
     """Service for saving metadata to GitHub"""
     
-    def __init__(self, token: str, repo: str, branch: str = "main"):
-        # Clean and validate inputs (remove problematic characters)
-        self.token = str(token).strip().replace('\n', '').replace('\r', '').replace('\t', '')
-        self.repo = str(repo).strip().replace('\n', '').replace('\r', '').replace('\t', '')
-        self.branch = str(branch).strip().replace('\n', '').replace('\r', '').replace('\t', '')
+    def __init__(self, token: str = "", repo: str = "", branch: str = "main"):
+        # Clean and validate inputs (remove ALL problematic characters)
+        import re
+        self.token = re.sub(r'[^\x20-\x7E]', '', str(token)).strip()  # Keep only printable ASCII
+        self.repo = re.sub(r'[^\x20-\x7E]', '', str(repo)).strip()    # Keep only printable ASCII
+        self.branch = re.sub(r'[^\x20-\x7E]', '', str(branch)).strip() # Keep only printable ASCII
         
-        # Validate required fields
+        # Set defaults if empty
         if not self.token:
-            raise ValueError("GitHub token is required")
+            self.token = ""
+            logger.warning("GitHub token not configured")
         if not self.repo:
-            raise ValueError("GitHub repository is required")
-        if '/' not in self.repo:
-            raise ValueError("Repository must be in format 'owner/repo'")
+            self.repo = ""
+            logger.warning("GitHub repository not configured")
+        if self.repo and '/' not in self.repo:
+            logger.warning("Repository should be in format 'owner/repo'")
         if not self.branch:
             self.branch = "main"
-        self.client = httpx.AsyncClient(
-            base_url="https://api.github.com",
-            headers={
-                "Authorization": f"token {self.token}",
-                "Accept": "application/vnd.github.v3+json"
-            }
-        )
+            
+        self.configured = bool(self.token and self.repo and '/' in self.repo)
+        
+        if self.configured:
+            self.client = httpx.AsyncClient(
+                base_url="https://api.github.com",
+                headers={
+                    "Authorization": f"token {self.token}",
+                    "Accept": "application/vnd.github.v3+json"
+                },
+                timeout=30.0
+            )
+        else:
+            self.client = None
     
     async def upload_file(self, file_path: Path, remote_path: str, commit_message: str) -> bool:
         """Upload a file to GitHub repository"""
+        if not self.configured:
+            logger.warning("GitHub not configured - cannot upload file")
+            return False
+            
         if not file_path.exists():
             logger.error(f"File not found: {file_path}")
             return False
@@ -75,6 +89,85 @@ class GitHubService:
             logger.error(f"Error uploading to GitHub: {e}")
             return False
     
+    async def upload_content(self, repo: str, file_path: str, content: str, commit_message: str) -> bool:
+        """Upload content directly to GitHub repository"""
+        if not self.configured:
+            logger.warning("GitHub not configured - cannot upload content")
+            return False
+        
+        # Sanitize inputs
+        import re
+        repo = re.sub(r'[^\x20-\x7E]', '', str(repo)).strip()
+        file_path = re.sub(r'[^\x20-\x7E]', '', str(file_path)).strip()
+        commit_message = re.sub(r'[^\x20-\x7E]', '', str(commit_message)).strip()
+        
+        logger.debug(f"Uploading to GitHub - repo: '{repo}', file: '{file_path}', token configured: {bool(self.token)}")
+            
+        try:
+            # Get existing file SHA if file exists
+            existing_sha = await self._get_file_sha_for_repo(repo, file_path)
+            
+            # Encode content
+            encoded_content = base64.b64encode(content.encode('utf-8')).decode('ascii')
+            
+            # Prepare data
+            data = {
+                "message": commit_message,
+                "content": encoded_content,
+                "branch": self.branch
+            }
+            
+            if existing_sha:
+                data["sha"] = existing_sha
+            
+            # Upload to GitHub
+            response = await self.client.put(
+                f"/repos/{repo}/contents/{file_path}",
+                json=data
+            )
+            
+            if response.status_code in [200, 201]:
+                logger.success(f"Content uploaded to GitHub: {file_path}")
+                return True
+            elif response.status_code == 404:
+                logger.error(f"Repository '{repo}' not found. Check if repository exists and token has access.")
+                return False
+            elif response.status_code == 401:
+                logger.error(f"GitHub authentication failed. Check if token is valid.")
+                return False
+            elif response.status_code == 403:
+                logger.error(f"GitHub access forbidden. Check if token has write permissions to '{repo}'.")
+                return False
+            else:
+                logger.error(f"GitHub content upload failed: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error uploading content to GitHub: {e}")
+            return False
+    
+    async def _get_file_sha_for_repo(self, repo: str, remote_path: str) -> Optional[str]:
+        """Get SHA of existing file in specific repo"""
+        # Sanitize inputs
+        import re
+        repo = re.sub(r'[^\x20-\x7E]', '', str(repo)).strip()
+        remote_path = re.sub(r'[^\x20-\x7E]', '', str(remote_path)).strip()
+        
+        try:
+            response = await self.client.get(
+                f"/repos/{repo}/contents/{remote_path}",
+                params={"ref": self.branch}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("sha")
+            else:
+                return None
+                
+        except Exception:
+            return None
+    
     async def _get_file_sha(self, remote_path: str) -> Optional[str]:
         """Get SHA of existing file"""
         try:
@@ -114,6 +207,83 @@ class GitHubService:
         
         return None
     
+    async def list_files(self, repo: str, path: str = "") -> list:
+        """List files and folders in a repository path"""
+        if not self.configured:
+            logger.warning("GitHub not configured - cannot list files")
+            return []
+        
+        # Sanitize inputs
+        import re
+        repo = re.sub(r'[^\x20-\x7E]', '', str(repo)).strip()
+        path = re.sub(r'[^\x20-\x7E]', '', str(path)).strip()
+            
+        try:
+            url = f"/repos/{repo}/contents"
+            if path:
+                url += f"/{path}"
+            
+            response = await self.client.get(
+                url,
+                params={"ref": self.branch}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                items = []
+                
+                for item in data:
+                    items.append({
+                        "name": item["name"],
+                        "path": item["path"],
+                        "type": item["type"],  # "file" or "dir"
+                        "size": item.get("size", 0),
+                        "download_url": item.get("download_url")
+                    })
+                
+                return items
+            else:
+                logger.error(f"GitHub list files failed: {response.status_code} - {response.text}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error listing GitHub files: {e}")
+            return []
+
+    async def get_file_content(self, repo: str, file_path: str) -> str:
+        """Get file content from repository"""
+        if not self.configured:
+            logger.warning("GitHub not configured - cannot get file content")
+            return ""
+        
+        # Sanitize inputs
+        import re
+        repo = re.sub(r'[^\x20-\x7E]', '', str(repo)).strip()
+        file_path = re.sub(r'[^\x20-\x7E]', '', str(file_path)).strip()
+            
+        try:
+            url = f"/repos/{repo}/contents/{file_path}"
+            
+            response = await self.client.get(
+                url,
+                params={"ref": self.branch}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("encoding") == "base64":
+                    content = base64.b64decode(data["content"]).decode('utf-8')
+                    return content
+                else:
+                    return data.get("content", "")
+            else:
+                logger.error(f"GitHub get file content failed: {response.status_code} - {response.text}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"Error getting GitHub file content: {e}")
+            return ""
+
     async def list_folders(self, path: str = "") -> list:
         """List folders in the repository"""
         try:

@@ -1,0 +1,44 @@
+{
+  "title": "placeholder_title",
+  "description": "placeholder_description_multiline",
+  "artist": "placeholder_artist",
+  "author": "placeholder_author",
+  "cover": "https://placeholder.url/cover.jpg",
+  "status": "placeholder_status",
+  "chapters": {
+    "001": {
+      "title": "placeholder_chapter_title_1",
+      "volume": "1",
+      "last_updated": "placeholder_timestamp_1",
+      "groups": {
+        "placeholder_group_name_1": [
+          "https://placeholder.url/page_1.webp",
+          "https://placeholder.url/page_2.webp",
+          "https://placeholder.url/page_3.webp"
+        ]
+      }
+    },
+    "002": {
+      "title": "placeholder_chapter_title_2",
+      "volume": "",
+      "last_updated": "placeholder_timestamp_2",
+      "groups": {
+        "placeholder_group_name_1": [
+          "https://placeholder.url/page_1.webp",
+          "https://placeholder.url/page_2.webp"
+        ]
+      }
+    },
+    "003": {
+      "title": "placeholder_chapter_title_3",
+      "volume": "",
+      "last_updated": "placeholder_timestamp_3",
+      "groups": {
+        "placeholder_group_name_1": [
+          "https://placeholder.url/page_1.webp",
+          "https://placeholder.url/page_2.webp"
+        ]
+      }
+    }
+  }
+}
