@@ -56,7 +56,7 @@ def main():
     engine.rootContext().setContextProperty("chapterModel", backend.chapter_model)
     engine.rootContext().setContextProperty("githubFolderModel", backend.github_folder_model)
     
-    # Load QML
+    # Load QML - Now using main.qml (modern interface)
     qml_file = Path(__file__).parent / "ui" / "qml" / "main.qml"
     engine.load(str(qml_file))
     

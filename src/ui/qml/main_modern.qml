@@ -31,21 +31,100 @@ ApplicationWindow {
     property bool isProcessing: false
     property bool sidebarCollapsed: false
     
+    // ===== STATISTICS PROPERTIES =====
+    property int totalChapters: 0
+    property int uploadsToday: 0
+    property int activeHosts: 0
+    property string storageSize: "0 MB"
+    property int queueCount: 0
+    property var recentActivity: []
+    
     // ===== COMPONENT INITIALIZATION =====
     Component.onCompleted: {
         backend.loadConfig()
         backend.refreshMangaList()
+        updateStatistics()
+        
+        // Add some example activities
+        addRecentActivity("info", "Aplicação iniciada", "🚀")
+        addRecentActivity("success", "Configuração carregada", "⚙️")
+        addRecentActivity("info", "Lista de mangás atualizada", "📚")
     }
     
     // ===== BACKEND CONNECTIONS =====
     Connections {
         target: backend
+        
         function onCookieTestResult(resultType, message) {
             // Handle cookie test results
             if (resultType === "success") {
                 console.log("Cookie test success:", message)
             } else {
                 console.log("Cookie test failed:", message)
+            }
+        }
+        
+        function onMangaListRefreshed() {
+            console.log("Manga list refreshed")
+            updateStatistics()
+        }
+        
+        function onUploadCompleted(chapterName, result) {
+            console.log("Upload completed:", chapterName)
+            uploadsToday++
+            
+            // Add to recent activity
+            var activity = {
+                "type": "upload",
+                "message": "Upload concluído: " + chapterName,
+                "timestamp": new Date().toLocaleTimeString(),
+                "icon": "📤"
+            }
+            recentActivity.unshift(activity)
+            if (recentActivity.length > 10) {
+                recentActivity.pop()
+            }
+            recentActivity = recentActivity.slice() // Trigger property change
+        }
+        
+        function onUploadFailed(chapterName, error) {
+            console.log("Upload failed:", chapterName, error)
+            
+            // Add to recent activity
+            var activity = {
+                "type": "error",
+                "message": "Falha no upload: " + chapterName,
+                "timestamp": new Date().toLocaleTimeString(),
+                "icon": "❌"
+            }
+            recentActivity.unshift(activity)
+            if (recentActivity.length > 10) {
+                recentActivity.pop()
+            }
+            recentActivity = recentActivity.slice() // Trigger property change
+        }
+        
+        function onConfigSaved() {
+            console.log("Config saved")
+            updateStatistics()
+        }
+        
+        function onJobStatusChanged(jobId, status, progress, message) {
+            console.log("Job status changed:", jobId, status)
+            
+            // Add to recent activity for significant status changes
+            if (status === "completed" || status === "failed") {
+                var activity = {
+                    "type": status === "completed" ? "success" : "error",
+                    "message": status === "completed" ? "Job concluído: " + jobId : "Job falhou: " + jobId,
+                    "timestamp": new Date().toLocaleTimeString(),
+                    "icon": status === "completed" ? "✅" : "❌"
+                }
+                recentActivity.unshift(activity)
+                if (recentActivity.length > 10) {
+                    recentActivity.pop()
+                }
+                recentActivity = recentActivity.slice() // Trigger property change
             }
         }
     }
@@ -82,7 +161,7 @@ ApplicationWindow {
                 // Title
                 Text {
                     text: "Manga Uploader Pro"
-                    font.pixelSize: ds.getResponsiveTextSize(ds.text_xl, parent.width)
+                    font.pixelSize: ds.text_xl
                     font.weight: ds.fontMedium
                     color: ds.textPrimary
                 }
@@ -90,11 +169,10 @@ ApplicationWindow {
             
             // ===== BUSCA GLOBAL =====
             ModernInput {
-                Layout.preferredWidth: Math.min(300, parent.width * 0.4)
-                Layout.minimumWidth: 200
+                Layout.preferredWidth: 300
                 placeholderText: "Buscar mangás..."
                 leftIcon: "🔍"
-                size: parent.width <= ds.mobile ? "xs" : "sm"
+                size: "sm"
                 clearable: true
                 
                 onTextChanged: {
@@ -236,10 +314,7 @@ ApplicationWindow {
         // ===== SIDEBAR =====
         Rectangle {
             id: sidebar
-            Layout.preferredWidth: {
-            if (parent.width <= ds.mobile) return sidebarCollapsed ? 60 : Math.min(180, parent.width * 0.45)
-            return sidebarCollapsed ? ds.sidebarCollapsedWidth : ds.sidebarWidth
-        }
+            Layout.preferredWidth: sidebarCollapsed ? ds.sidebarCollapsedWidth : ds.sidebarWidth
             Layout.fillHeight: true
             color: ds.bgSurface
             
@@ -447,7 +522,7 @@ ApplicationWindow {
                                 GridLayout {
                                     Layout.fillWidth: true
                                     Layout.alignment: Qt.AlignHCenter
-                                    columns: ds.getResponsiveColumns(parent.width, 4, 140)
+                                    columns: 4
                                     columnSpacing: ds.space4
                                     rowSpacing: ds.space4
                                     
@@ -456,7 +531,7 @@ ApplicationWindow {
                                         title: "UPLOAD"
                                         subtitle: "Novo projeto"
                                         icon: "📤"
-                                        cardColor: ds.accent
+                                        color: ds.accent
                                         
                                         onClicked: {
                                             // TODO: Open upload dialog
@@ -468,7 +543,7 @@ ApplicationWindow {
                                         title: "INDEXADOR" 
                                         subtitle: "Gerenciar hub"
                                         icon: "📋"
-                                        cardColor: ds.success
+                                        color: ds.success
                                         
                                         onClicked: indexadorDialog.open()
                                     }
@@ -478,7 +553,7 @@ ApplicationWindow {
                                         title: "SYNC GITHUB"
                                         subtitle: "Sincronizar"
                                         icon: "🔄"
-                                        cardColor: ds.warning
+                                        color: ds.warning
                                         
                                         onClicked: {
                                             backend.saveToGitHub()
@@ -490,7 +565,7 @@ ApplicationWindow {
                                         title: "RELATÓRIO"
                                         subtitle: "Ver análise"
                                         icon: "📊"
-                                        cardColor: ds.brandSecondary
+                                        color: ds.brandSecondary
                                         
                                         onClicked: {
                                             analyticsDialog.open()
@@ -522,11 +597,9 @@ ApplicationWindow {
                                     Layout.alignment: Qt.AlignHCenter
                                 }
                                 
-                                GridLayout {
+                                RowLayout {
                                     Layout.fillWidth: true
-                                    columns: ds.getResponsiveColumns(parent.width, 6, 130)
-                                    columnSpacing: ds.space4
-                                    rowSpacing: ds.space3
+                                    spacing: ds.space8
                                     
                                     // Total Mangás
                                     StatCard {
@@ -538,36 +611,93 @@ ApplicationWindow {
                                     // Total Capítulos  
                                     StatCard {
                                         title: "Capítulos"
-                                        value: "1,234"
+                                        value: totalChapters.toString()
                                         icon: "📑"
                                     }
                                     
                                     // Uploads Hoje
                                     StatCard {
                                         title: "Hoje"
-                                        value: "12 uploads"
+                                        value: uploadsToday + " upload" + (uploadsToday === 1 ? "" : "s")
                                         icon: "📤"
                                     }
                                     
                                     // Hosts Ativos
                                     StatCard {
                                         title: "Hosts Ativos"
-                                        value: "10/10"
+                                        value: activeHosts + "/10"
                                         icon: "🌐"
                                     }
                                     
                                     // Storage
                                     StatCard {
                                         title: "Storage"
-                                        value: "2.3GB"
+                                        value: storageSize
                                         icon: "💾"
                                     }
                                     
                                     // Queue
                                     StatCard {
                                         title: "Queue"
-                                        value: "3 pendentes"
+                                        value: queueCount + " pendente" + (queueCount === 1 ? "" : "s")
                                         icon: "⏳"
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // ===== ATIVIDADE RECENTE =====
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 200
+                            radius: ds.radius_lg
+                            color: ds.bgCard
+                            border.color: ds.border
+                            border.width: 1
+                            
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: ds.space6
+                                spacing: ds.space4
+                                
+                                Text {
+                                    text: "📈 Atividade Recente"
+                                    font.pixelSize: ds.text_xl
+                                    font.weight: ds.fontBold
+                                    color: ds.textPrimary
+                                    Layout.alignment: Qt.AlignHCenter
+                                }
+                                
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    
+                                    ColumnLayout {
+                                        width: parent.width
+                                        spacing: ds.space2
+                                        
+                                        Repeater {
+                                            model: recentActivity
+                                            
+                                            ActivityItem {
+                                                Layout.fillWidth: true
+                                                icon: modelData.icon
+                                                message: modelData.message
+                                                timestamp: modelData.timestamp
+                                                type: modelData.type
+                                            }
+                                        }
+                                        
+                                        // Placeholder quando não há atividade
+                                        Text {
+                                            text: "📱 Nenhuma atividade recente\n\nFaça um upload para ver o histórico aqui"
+                                            font.pixelSize: ds.text_base
+                                            color: ds.textSecondary
+                                            horizontalAlignment: Text.AlignHCenter
+                                            Layout.alignment: Qt.AlignHCenter
+                                            Layout.fillWidth: true
+                                            visible: recentActivity.length === 0
+                                        }
                                     }
                                 }
                             }
@@ -596,422 +726,66 @@ ApplicationWindow {
                                 }
                                 
                                 GridView {
-                                    id: mangaGrid
+                                    id: mangaGridView
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     
-                                    cellWidth: 300
+                                    cellWidth: 280
                                     cellHeight: 120
                                     
                                     model: mangaModel
                                     
                                     delegate: MangaCardModern {
+                                        width: mangaGridView.cellWidth - ds.space2
+                                        height: mangaGridView.cellHeight - ds.space2
+                                        
                                         title: model.title
                                         coverUrl: model.coverUrl
                                         chapterCount: model.chapterCount
                                         status: "Em andamento"
-                                        width: mangaGrid.cellWidth - ds.space4
                                         
                                         onClicked: {
                                             selectManga(model.title, model.path)
                                         }
                                     }
                                 }
+                                
+                                // Placeholder quando não há mangás
+                                Text {
+                                    text: "📂 Nenhum mangá encontrado\n\nVerifique se a pasta raiz está configurada corretamente"
+                                    font.pixelSize: ds.text_base
+                                    color: ds.textSecondary
+                                    horizontalAlignment: Text.AlignHCenter
+                                    Layout.alignment: Qt.AlignHCenter
+                                    visible: mangaGridView.count === 0
+                                }
                             }
                         }
                     }
                 }
                 
-                // ===== DETALHES DO MANGÁ COMPLETO =====
-                ScrollView {
+                // ===== DETALHES DO MANGÁ =====
+                MangaDetailsView {
+                    mangaData: currentManga
+                    isLoading: false
                     
-                    ColumnLayout {
-                        width: parent.width
-                        spacing: ds.space6
-                        
-                        // ===== MANGA INFO HEADER =====
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 200
-                            radius: ds.radius_lg
-                            color: ds.bgCard
-                            border.color: ds.border
-                            border.width: 1
-                            
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: ds.space6
-                                spacing: ds.space6
-                                
-                                // Cover Image
-                                Rectangle {
-                                    Layout.preferredWidth: 140
-                                    Layout.preferredHeight: 180
-                                    radius: ds.radius_lg
-                                    color: ds.bgSurface
-                                    border.color: ds.border
-                                    border.width: 2
-                                    clip: true
-                                    
-                                    Image {
-                                        anchors.fill: parent
-                                        anchors.margins: 2
-                                        source: backend.currentMangaCover || ""
-                                        fillMode: Image.PreserveAspectCrop
-                                        visible: backend.currentMangaCover
-                                        smooth: true
-                                        cache: true
-                                        asynchronous: true
-                                    }
-                                    
-                                    // Fallback cover
-                                    Rectangle {
-                                        anchors.fill: parent
-                                        color: ds.accent
-                                        visible: !backend.currentMangaCover
-                                        
-                                        Text {
-                                            anchors.centerIn: parent
-                                            text: backend.currentMangaTitle ? backend.currentMangaTitle.charAt(0).toUpperCase() : "?"
-                                            font.pixelSize: ds.text_4xl
-                                            font.weight: ds.fontBold
-                                            color: ds.textPrimary
-                                        }
-                                    }
-                                }
-                                
-                                // Manga Details
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    spacing: ds.space4
-                                    
-                                    // Title
-                                    Text {
-                                        text: backend.currentMangaTitle || "Nenhum mangá selecionado"
-                                        font.pixelSize: ds.text_3xl
-                                        font.weight: ds.fontBold
-                                        color: ds.textPrimary
-                                        Layout.fillWidth: true
-                                        wrapMode: Text.WordWrap
-                                    }
-                                    
-                                    // Description
-                                    Rectangle {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 80
-                                        radius: ds.radius_md
-                                        color: ds.bgSurface
-                                        border.color: ds.border
-                                        border.width: 1
-                                        visible: backend.currentMangaDescription
-                                        
-                                        ScrollView {
-                                            anchors.fill: parent
-                                            anchors.margins: ds.space3
-                                            
-                                            Text {
-                                                width: parent.width
-                                                text: backend.currentMangaDescription || ""
-                                                font.pixelSize: ds.text_sm
-                                                color: ds.textSecondary
-                                                wrapMode: Text.WordWrap
-                                                lineHeight: 1.4
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Author and Artist info
-                                    GridLayout {
-                                        Layout.fillWidth: true
-                                        columns: parent.width <= ds.tablet ? 1 : 2
-                                        columnSpacing: ds.space6
-                                        rowSpacing: ds.space2
-                                        
-                                        Text {
-                                            text: "✍️ Autor: " + (backend.currentMangaAuthor || "Desconhecido")
-                                            font.pixelSize: ds.text_sm
-                                            color: ds.textSecondary
-                                            Layout.fillWidth: true
-                                            elide: Text.ElideRight
-                                        }
-                                        
-                                        Text {
-                                            text: "🎨 Artista: " + (backend.currentMangaArtist || "Desconhecido")
-                                            font.pixelSize: ds.text_sm
-                                            color: ds.textSecondary
-                                            Layout.fillWidth: true
-                                            elide: Text.ElideRight
-                                        }
-                                        
-                                        Text {
-                                            text: "👥 Grupo: " + (backend.currentMangaGroup || "Indefinido")
-                                            font.pixelSize: ds.text_sm
-                                            color: ds.textSecondary
-                                            Layout.fillWidth: true
-                                            elide: Text.ElideRight
-                                        }
-                                        
-                                        Text {
-                                            text: "🏷️ Gêneros: " + (backend.currentMangaGenres || "Não especificado")
-                                            font.pixelSize: ds.text_sm
-                                            color: ds.textSecondary
-                                            Layout.fillWidth: true
-                                            elide: Text.ElideRight
-                                        }
-                                    }
-                                    
-                                    // Stats row
-                                    GridLayout {
-                                        Layout.fillWidth: true
-                                        columns: parent.width <= ds.mobile ? 1 : 2
-                                        columnSpacing: ds.space8
-                                        rowSpacing: ds.space2
-                                        
-                                        Text {
-                                            text: "📑 Capítulos: " + backend.currentMangaChapterCount
-                                            font.pixelSize: ds.text_base
-                                            color: ds.textSecondary
-                                        }
-                                        
-                                        Text {
-                                            text: "📊 Status: " + (backend.currentMangaStatus || "Desconhecido")
-                                            font.pixelSize: ds.text_base
-                                            color: ds.textSecondary
-                                        }
-                                        
-                                        Text {
-                                            text: "📅 Última Atualização: " + (backend.currentMangaLastUpdate || "Não disponível")
-                                            font.pixelSize: ds.text_base
-                                            color: ds.textSecondary
-                                        }
-                                        
-                                        Text {
-                                            text: "🔗 JSON: " + (backend.currentMangaHasJson ? "Disponível" : "Não gerado")
-                                            font.pixelSize: ds.text_base
-                                            color: backend.currentMangaHasJson ? ds.success : ds.warning
-                                        }
-                                    }
-                                    
-                                    Item { Layout.fillHeight: true }
-                                    
-                                    // Quick Actions
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: ds.space3
-                                        
-                                        ModernButton {
-                                            text: "Upload Capítulos"
-                                            icon: "📤"
-                                            variant: "primary"
-                                            size: "lg"
-                                            enabled: currentManga
-                                            
-                                            onClicked: {
-                                                uploadWorkflowDialog.open()
-                                            }
-                                        }
-                                        
-                                        ModernButton {
-                                            text: "Editar Metadata"
-                                            icon: "✏️"
-                                            variant: "secondary"
-                                            size: "lg"
-                                            enabled: currentManga
-                                            
-                                            onClicked: {
-                                                // TODO: Open metadata editor
-                                            }
-                                        }
-                                        
-                                        ModernButton {
-                                            text: "Gerar JSON"
-                                            icon: "📋"
-                                            variant: "success"
-                                            size: "lg"
-                                            enabled: currentManga
-                                            
-                                            onClicked: {
-                                                indexadorDialog.open()
-                                            }
-                                        }
-                                        
-                                        Item { Layout.fillWidth: true }
-                                        
-                                        ModernButton {
-                                            text: "Salvar GitHub"
-                                            icon: "⚡"
-                                            variant: "accent"
-                                            size: "lg"
-                                            enabled: currentManga && currentManga.hasJson
-                                            
-                                            onClicked: {
-                                                backend.saveToGitHub()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // ===== CHAPTERS SECTION =====
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.minimumHeight: 400
-                            radius: ds.radius_lg
-                            color: ds.bgCard
-                            border.color: ds.border
-                            border.width: 1
-                            
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: ds.space6
-                                spacing: ds.space4
-                                
-                                // Chapters Header
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: ds.space4
-                                    
-                                    Text {
-                                        text: "📑 CAPÍTULOS"
-                                        font.pixelSize: ds.text_xl
-                                        font.weight: ds.fontBold
-                                        color: ds.textPrimary
-                                    }
-                                    
-                                    Rectangle {
-                                        width: countBadge.implicitWidth + ds.space3
-                                        height: ds.space6
-                                        radius: ds.radius_full
-                                        color: ds.accent
-                                        
-                                        Text {
-                                            id: countBadge
-                                            anchors.centerIn: parent
-                                            text: currentManga ? currentManga.chapterCount || 0 : 0
-                                            font.pixelSize: ds.text_sm
-                                            font.weight: ds.fontBold
-                                            color: ds.textPrimary
-                                        }
-                                    }
-                                    
-                                    Item { Layout.fillWidth: true }
-                                    
-                                    // Chapter Actions
-                                    RowLayout {
-                                        spacing: ds.space3
-                                        
-                                        ModernButton {
-                                            text: "Selecionar Todos"
-                                            icon: "☑️"
-                                            variant: "ghost"
-                                            size: "sm"
-                                            enabled: currentManga
-                                            
-                                            onClicked: {
-                                                backend.selectAllChapters()
-                                            }
-                                        }
-                                        
-                                        ModernButton {
-                                            text: "Inverter Ordem"
-                                            icon: "🔄"
-                                            variant: "ghost"
-                                            size: "sm"
-                                            enabled: currentManga
-                                            
-                                            onClicked: {
-                                                backend.toggleChapterOrder()
-                                            }
-                                        }
-                                        
-                                        ModernButton {
-                                            text: "Upload Selecionados"
-                                            icon: "📤"
-                                            variant: "primary"
-                                            size: "sm"
-                                            enabled: currentManga && selectedChapters.length > 0
-                                            
-                                            onClicked: {
-                                                uploadWorkflowDialog.open()
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                // Chapters List
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    radius: ds.radius_md
-                                    color: ds.bgSurface
-                                    border.color: ds.divider
-                                    border.width: 1
-                                    
-                                    ModernChapterList {
-                                        anchors.fill: parent
-                                        anchors.margins: ds.space3
-                                        model: chapterModel
-                                        visible: currentManga
-                                        
-                                        onAllSelected: {
-                                            backend.selectAllChapters()
-                                        }
-                                        
-                                        onAllUnselected: {
-                                            backend.unselectAllChapters()
-                                        }
-                                        
-                                        onOrderInverted: {
-                                            backend.toggleChapterOrder()
-                                        }
-                                        
-                                        onUploadSelected: {
-                                            uploadWorkflowDialog.open()
-                                        }
-                                        
-                                        onProcessSelected: {
-                                            uploadWorkflowDialog.open()
-                                        }
-                                        
-                                        onChapterClicked: function(name) {
-                                            console.log("Chapter clicked:", name)
-                                        }
-                                        
-                                        onChapterUploadClicked: function(name) {
-                                            uploadWorkflowDialog.open()
-                                        }
-                                        
-                                        onChapterEditClicked: function(name) {
-                                            console.log("Chapter edit clicked:", name)
-                                        }
-                                    }
-                                    
-                                    // Empty state when no manga selected
-                                    ColumnLayout {
-                                        anchors.centerIn: parent
-                                        spacing: ds.space4
-                                        visible: !currentManga
-                                        
-                                        Text {
-                                            text: "📑"
-                                            font.pixelSize: ds.text_4xl
-                                            Layout.alignment: Qt.AlignHCenter
-                                        }
-                                        
-                                        Text {
-                                            text: "Selecione um mangá na biblioteca\npara ver os capítulos"
-                                            font.pixelSize: ds.text_lg
-                                            color: ds.textSecondary
-                                            Layout.alignment: Qt.AlignHCenter
-                                            horizontalAlignment: Text.AlignHCenter
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    onBackClicked: {
+                        currentManga = null
+                    }
+                    
+                    onUploadChaptersClicked: {
+                        uploadWorkflowDialog.open()
+                    }
+                    
+                    onUploadSingleChapter: function(chapterName) {
+                        console.log("Upload single chapter:", chapterName)
+                        // TODO: Implementar upload de capítulo individual
+                        uploadWorkflowDialog.open()
+                    }
+                    
+                    onEditChapter: function(chapterName) {
+                        console.log("Edit chapter:", chapterName)
+                        // TODO: Implementar edição de capítulo
                     }
                 }
             }
@@ -1149,15 +923,15 @@ ApplicationWindow {
         property string title: ""
         property string subtitle: ""
         property string icon: ""
-        property color cardColor: ds.accent
+        property color color: ds.accent
         
         signal clicked()
         
         width: 120
         height: 80
         radius: ds.radius_md
-        color: mouseArea.containsMouse ? Qt.lighter(cardColor, 1.1) : cardColor
-        border.color: cardColor
+        color: mouseArea.containsMouse ? Qt.lighter(parent.color, 1.1) : parent.color
+        border.color: parent.color
         border.width: 2
         
         Behavior on color {
@@ -1304,23 +1078,23 @@ ApplicationWindow {
     
     // ===== DIALOGS =====
     
-    // Settings Drawer (placeholder)
+    // Settings Drawer (functional)
     Drawer {
         id: settingsDrawer
-        width: 450
+        width: Math.min(window.width * 0.9, 1000)
         height: parent.height
         edge: Qt.RightEdge
         
-        Rectangle {
+        background: Rectangle {
+            color: "transparent"
+        }
+        
+        ModernSettingsPanel {
             anchors.fill: parent
-            color: ds.bgSurface
             
-            Text {
-                anchors.centerIn: parent
-                text: "Configurações\n(Em desenvolvimento)"
-                font.pixelSize: ds.text_lg
-                color: ds.textPrimary
-                horizontalAlignment: Text.AlignHCenter
+            onSaveSettings: {
+                console.log("Settings saved from drawer")
+                settingsDrawer.close()
             }
         }
     }
@@ -1403,6 +1177,40 @@ ApplicationWindow {
         }
     }
     
+    // Upload Workflow Dialog
+    Dialog {
+        id: uploadWorkflowDialog
+        width: Math.min(window.width * 0.9, 1200)
+        height: Math.min(window.height * 0.9, 800)
+        anchors.centerIn: parent
+        
+        modal: true
+        focus: true
+        
+        background: Rectangle {
+            color: "transparent"
+        }
+        
+        contentItem: ModernUploadWorkflow {
+            anchors.fill: parent
+            currentManga: window.currentManga
+            
+            onCancelled: {
+                uploadWorkflowDialog.close()
+            }
+            
+            onUploadStarted: {
+                console.log("Upload started")
+                // Keep dialog open during upload to show progress
+            }
+            
+            onUploadCompleted: {
+                console.log("Upload completed")
+                uploadWorkflowDialog.close()
+            }
+        }
+    }
+    
     // ===== HELPER FUNCTIONS =====
     function selectManga(title, path) {
         currentManga = {
@@ -1412,6 +1220,80 @@ ApplicationWindow {
         
         // Carrega detalhes do mangá
         backend.loadMangaDetails(path)
+    }
+    
+    // ===== STATISTICS FUNCTIONS =====
+    function updateStatistics() {
+        console.log("Updating statistics...")
+        
+        // Calculate total chapters from all manga
+        var totalChaps = 0
+        for (var i = 0; i < mangaModel.rowCount(); i++) {
+            var index = mangaModel.index(i, 0)
+            var item = mangaModel.data(index, Qt.UserRole)
+            if (item && item.chapterCount) {
+                totalChaps += item.chapterCount
+            }
+        }
+        totalChapters = totalChaps
+        
+        // Count active hosts
+        var activeCount = 0
+        var hostList = ["Catbox", "Imgur", "ImgBB", "Gofile", "Pixeldrain", "Lensdump", "ImageChest", "Imgbox", "ImgHippo", "ImgPile"]
+        for (var j = 0; j < hostList.length; j++) {
+            if (isHostActive(hostList[j])) {
+                activeCount++
+            }
+        }
+        activeHosts = activeCount
+        
+        // Calculate storage size estimation
+        var estimatedMB = totalChapters * 15 // ~15MB per chapter average
+        storageSize = estimatedMB > 1000 ? (estimatedMB / 1000).toFixed(1) + " GB" : estimatedMB + " MB"
+        
+        // Get queue count (placeholder for now)
+        if (backend.getQueueCount) {
+            queueCount = backend.getQueueCount()
+        } else {
+            queueCount = 0
+        }
+        
+        console.log("Statistics updated:", {
+            totalChapters: totalChapters,
+            activeHosts: activeHosts,
+            storageSize: storageSize,
+            queueCount: queueCount
+        })
+    }
+    
+    function isHostActive(hostName) {
+        if (!backend.config || !backend.config.hosts) {
+            return false
+        }
+        
+        var hostConfig = backend.config.hosts[hostName]
+        if (!hostConfig) {
+            // Default enabled for non-API hosts
+            var apiHosts = ["Imgur", "ImgBB", "Lensdump", "ImgHippo", "ImgPile"]
+            return !apiHosts.includes(hostName)
+        }
+        
+        return hostConfig.enabled !== false
+    }
+    
+    function addRecentActivity(type, message, icon) {
+        var activity = {
+            "type": type,
+            "message": message,
+            "timestamp": new Date().toLocaleTimeString(),
+            "icon": icon || "📱"
+        }
+        
+        recentActivity.unshift(activity)
+        if (recentActivity.length > 10) {
+            recentActivity.pop()
+        }
+        recentActivity = recentActivity.slice() // Trigger property change
     }
     
     // ===== ANIMATIONS =====

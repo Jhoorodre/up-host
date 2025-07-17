@@ -271,6 +271,18 @@ class Backend(QObject):
     def currentMangaHasJson(self):
         return self._manga_info.get("hasJson", False)
     
+    @Property(str, notify=mangaInfoChanged)
+    def currentMangaGenres(self):
+        return self._manga_info.get("genres", "")
+    
+    @Property(str, notify=mangaInfoChanged)
+    def currentMangaLastUpdate(self):
+        return self._manga_info.get("lastUpdate", "")
+    
+    @Property(str, notify=mangaInfoChanged)
+    def currentMangaPath(self):
+        return self._manga_info.get("path", "")
+    
     @Slot()
     def initialize_async_services(self):
         """Initialize async services after event loop is ready"""

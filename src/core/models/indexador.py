@@ -290,7 +290,7 @@ class Features(BaseModel):
 
 class IndexadorOriginal(BaseModel):
     """Estrutura EXATA do JSON do CAUTION.txt"""
-    schema: Dict[str, str]  # Campo direto sem alias
+    schema_version: Dict[str, str] = Field(..., alias="schema")  # Campo direto sem alias
     meta: Dict[str, Any]
     hub: Hub
     social: Dict[str, List[SocialPlatform]]
