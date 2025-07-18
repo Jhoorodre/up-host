@@ -395,7 +395,7 @@ Rectangle {
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.RightButton
             
-            onClicked: {
+            onClicked: function(mouse) {
                 if (mouse.button === Qt.LeftButton) {
                     chapterItem.chapterClicked(chapterName)
                 }

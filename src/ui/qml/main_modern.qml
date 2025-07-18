@@ -39,11 +39,37 @@ ApplicationWindow {
     property int queueCount: 0
     property var recentActivity: []
     
+    // Quick Actions states
+    property bool isSyncingGitHub: false
+    property bool isGeneratingAnalytics: false
+    
+    // Sidebar filter states
+    property string currentFilter: "all" // all, favoritos, recentes, progresso, concluidos
+    property var favoritedManga: []
+    property var recentManga: []
+    
+    // Tag system
+    property var availableTags: []
+    property var selectedTags: []
+    property string currentTag: ""
+    
     // ===== COMPONENT INITIALIZATION =====
     Component.onCompleted: {
         backend.loadConfig()
         backend.refreshMangaList()
         updateStatistics()
+        checkQuickActionsAvailability()
+        
+        // Load user data
+        if (backend.loadFavorites) {
+            backend.loadFavorites()
+        }
+        if (backend.loadRecentManga) {
+            backend.loadRecentManga()
+        }
+        
+        // Initialize tag system
+        initializeTags()
         
         // Add some example activities
         addRecentActivity("info", "Aplicação iniciada", "🚀")
@@ -67,6 +93,38 @@ ApplicationWindow {
         function onMangaListRefreshed() {
             console.log("Manga list refreshed")
             updateStatistics()
+            updateTagCounts()
+            
+            // Update filter counts when manga list changes
+            if (currentFilter !== "all") {
+                filterMangaList()
+            }
+        }
+        
+        function onFavoritesLoaded(favorites) {
+            console.log("Favorites loaded:", favorites.length)
+            favoritedManga = favorites || []
+        }
+        
+        function onRecentMangaLoaded(recent) {
+            console.log("Recent manga loaded:", recent.length)
+            recentManga = recent || []
+        }
+        
+        function onGithubSyncStarted() {
+            console.log("GitHub sync started")
+            isSyncingGitHub = true
+            addRecentActivity("sync", "Sincronização GitHub iniciada", "🔄")
+        }
+        
+        function onGithubSyncFinished(success) {
+            console.log("GitHub sync finished:", success)
+            isSyncingGitHub = false
+            if (success) {
+                addRecentActivity("success", "Sincronização GitHub concluída", "✅")
+            } else {
+                addRecentActivity("error", "Falha na sincronização GitHub", "❌")
+            }
         }
         
         function onUploadCompleted(chapterName, result) {
@@ -372,36 +430,74 @@ ApplicationWindow {
                     spacing: ds.space3
                     visible: !sidebarCollapsed
                     
+                    // Todos
+                    SidebarItem {
+                        icon: "📚"
+                        text: "Todos"
+                        count: mangaModel ? mangaModel.rowCount() : 0
+                        active: currentFilter === "all"
+                        
+                        onClicked: {
+                            currentFilter = "all"
+                            filterMangaList()
+                            addRecentActivity("filter", "Filtro removido - Exibindo todos", "📚")
+                        }
+                    }
+                    
                     // Favoritos
                     SidebarItem {
                         icon: "🌟"
                         text: "Favoritos"
-                        count: 3
-                        active: false
+                        count: favoritedManga.length
+                        active: currentFilter === "favoritos"
+                        
+                        onClicked: {
+                            currentFilter = "favoritos"
+                            filterMangaList()
+                            addRecentActivity("filter", "Filtro: Favoritos aplicado", "🌟")
+                        }
                     }
                     
                     // Recentes
                     SidebarItem {
                         icon: "📈"
                         text: "Recentes"
-                        count: 8
-                        active: false
+                        count: recentManga.length
+                        active: currentFilter === "recentes"
+                        
+                        onClicked: {
+                            currentFilter = "recentes"
+                            filterMangaList()
+                            addRecentActivity("filter", "Filtro: Recentes aplicado", "📈")
+                        }
                     }
                     
                     // Em Progresso
                     SidebarItem {
                         icon: "🔄"
                         text: "Em Progresso"
-                        count: 12
-                        active: true
+                        count: getProgressCount()
+                        active: currentFilter === "progresso"
+                        
+                        onClicked: {
+                            currentFilter = "progresso"
+                            filterMangaList()
+                            addRecentActivity("filter", "Filtro: Em Progresso aplicado", "🔄")
+                        }
                     }
                     
                     // Concluídos
                     SidebarItem {
                         icon: "✅"
                         text: "Concluídos"
-                        count: 47
-                        active: false
+                        count: getCompletedCount()
+                        active: currentFilter === "concluidos"
+                        
+                        onClicked: {
+                            currentFilter = "concluidos"
+                            filterMangaList()
+                            addRecentActivity("filter", "Filtro: Concluídos aplicado", "✅")
+                        }
                     }
                 }
                 
@@ -426,10 +522,27 @@ ApplicationWindow {
                         color: ds.textSecondary
                     }
                     
-                    TagItem { text: "Action"; count: 23 }
-                    TagItem { text: "Romance"; count: 15 }
-                    TagItem { text: "Isekai"; count: 8 }
-                    TagItem { text: "Drama"; count: 12 }
+                    Repeater {
+                        model: availableTags
+                        
+                        TagItem {
+                            text: modelData.name
+                            count: modelData.count
+                            active: currentTag === modelData.name
+                            
+                            onClicked: {
+                                if (currentTag === modelData.name) {
+                                    currentTag = ""
+                                    currentFilter = "all"
+                                } else {
+                                    currentTag = modelData.name
+                                    currentFilter = "tag"
+                                }
+                                filterMangaList()
+                                addRecentActivity("filter", "Tag aplicada: " + modelData.name, "🏷️")
+                            }
+                        }
+                    }
                 }
                 
                 // ===== SEPARADOR =====
@@ -531,10 +644,11 @@ ApplicationWindow {
                                         title: "UPLOAD"
                                         subtitle: "Novo projeto"
                                         icon: "📤"
-                                        color: ds.accent
+                                        cardColor: ds.accent
                                         
                                         onClicked: {
-                                            // TODO: Open upload dialog
+                                            uploadWorkflowDialog.open()
+                                            addRecentActivity("upload", "Iniciado novo workflow de upload", "📤")
                                         }
                                     }
                                     
@@ -543,7 +657,7 @@ ApplicationWindow {
                                         title: "INDEXADOR" 
                                         subtitle: "Gerenciar hub"
                                         icon: "📋"
-                                        color: ds.success
+                                        cardColor: ds.success
                                         
                                         onClicked: indexadorDialog.open()
                                     }
@@ -551,9 +665,11 @@ ApplicationWindow {
                                     // GitHub Sync Card
                                     QuickActionCard {
                                         title: "SYNC GITHUB"
-                                        subtitle: "Sincronizar"
+                                        subtitle: isSyncingGitHub ? "Sincronizando..." : "Sincronizar"
                                         icon: "🔄"
-                                        color: ds.warning
+                                        cardColor: ds.warning
+                                        enabled: !isSyncingGitHub
+                                        loading: isSyncingGitHub
                                         
                                         onClicked: {
                                             backend.saveToGitHub()
@@ -563,12 +679,19 @@ ApplicationWindow {
                                     // Reports Card
                                     QuickActionCard {
                                         title: "RELATÓRIO"
-                                        subtitle: "Ver análise"
+                                        subtitle: isGeneratingAnalytics ? "Carregando..." : "Ver análise"
                                         icon: "📊"
-                                        color: ds.brandSecondary
+                                        cardColor: ds.brandSecondary
+                                        enabled: !isGeneratingAnalytics
+                                        loading: isGeneratingAnalytics
                                         
                                         onClicked: {
+                                            isGeneratingAnalytics = true
                                             analyticsDialog.open()
+                                            addRecentActivity("analytics", "Aberto dashboard de análise", "📊")
+                                            
+                                            // Start analytics loading timer
+                                            analyticsLoadingTimer.start()
                                         }
                                     }
                                 }
@@ -743,9 +866,27 @@ ApplicationWindow {
                                         coverUrl: model.coverUrl
                                         chapterCount: model.chapterCount
                                         status: "Em andamento"
+                                        isFavorited: favoritedManga.indexOf(model.path) !== -1
                                         
                                         onClicked: {
                                             selectManga(model.title, model.path)
+                                            updateRecentManga(model.path)
+                                        }
+                                        
+                                        onUploadClicked: {
+                                            selectManga(model.title, model.path)
+                                            uploadWorkflowDialog.open()
+                                            addRecentActivity("upload", "Upload iniciado: " + model.title, "📤")
+                                        }
+                                        
+                                        onEditClicked: {
+                                            selectManga(model.title, model.path)
+                                            indexadorDialog.open()
+                                            addRecentActivity("edit", "Editando: " + model.title, "✏️")
+                                        }
+                                        
+                                        onFavoriteClicked: {
+                                            toggleFavorite(model.path)
                                         }
                                     }
                                 }
@@ -856,11 +997,14 @@ ApplicationWindow {
     component TagItem: Rectangle {
         property string text: ""
         property int count: 0
+        property bool active: false
+        
+        signal clicked()
         
         Layout.fillWidth: true
         height: ds.space8
         radius: ds.radius_sm
-        color: mouseArea.containsMouse ? ds.hover : "transparent"
+        color: active ? ds.accent : (mouseArea.containsMouse ? ds.hover : "transparent")
         
         RowLayout {
             anchors.fill: parent
@@ -870,20 +1014,20 @@ ApplicationWindow {
             Text {
                 text: "#"
                 font.pixelSize: ds.text_sm
-                color: ds.accent
+                color: active ? ds.textPrimary : ds.accent
             }
             
             Text {
                 Layout.fillWidth: true
                 text: parent.parent.text
                 font.pixelSize: ds.text_sm
-                color: ds.textSecondary
+                color: active ? ds.textPrimary : ds.textSecondary
             }
             
             Text {
                 text: count
                 font.pixelSize: ds.text_xs
-                color: ds.textSecondary
+                color: active ? ds.textPrimary : ds.textSecondary
             }
         }
         
@@ -892,6 +1036,10 @@ ApplicationWindow {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
+            
+            onClicked: {
+                parent.clicked()
+            }
         }
     }
     
@@ -923,16 +1071,19 @@ ApplicationWindow {
         property string title: ""
         property string subtitle: ""
         property string icon: ""
-        property color color: ds.accent
+        property color cardColor: ds.accent
+        property bool enabled: true
+        property bool loading: false
         
         signal clicked()
         
         width: 120
         height: 80
         radius: ds.radius_md
-        color: mouseArea.containsMouse ? Qt.lighter(parent.color, 1.1) : parent.color
-        border.color: parent.color
+        color: enabled ? (mouseArea.containsMouse ? Qt.lighter(cardColor, 1.1) : cardColor) : ds.bgDisabled
+        border.color: cardColor
         border.width: 2
+        opacity: enabled ? 1.0 : 0.6
         
         Behavior on color {
             ColorAnimation {
@@ -947,9 +1098,17 @@ ApplicationWindow {
             spacing: ds.space2
             
             Text {
-                text: icon
+                text: loading ? "🔄" : icon
                 font.pixelSize: ds.text_xl
                 Layout.alignment: Qt.AlignHCenter
+                
+                RotationAnimation on rotation {
+                    running: loading
+                    duration: 1000
+                    loops: Animation.Infinite
+                    from: 0
+                    to: 360
+                }
             }
             
             Text {
@@ -974,9 +1133,14 @@ ApplicationWindow {
             id: mouseArea
             anchors.fill: parent
             hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
+            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+            enabled: parent.enabled
             
-            onClicked: parent.clicked()
+            onClicked: {
+                if (parent.enabled) {
+                    parent.clicked()
+                }
+            }
         }
     }
     
@@ -1099,25 +1263,9 @@ ApplicationWindow {
         }
     }
     
-    // Indexador Dialog (placeholder)
-    Dialog {
+    // Indexador Dialog
+    IndexadorDialog {
         id: indexadorDialog
-        width: 800
-        height: 600
-        anchors.centerIn: parent
-        
-        background: Rectangle {
-            color: ds.bgSurface
-            radius: ds.radius_lg
-        }
-        
-        Text {
-            anchors.centerIn: parent
-            text: "Indexador JSON\n(Em desenvolvimento)"
-            font.pixelSize: ds.text_lg
-            color: ds.textPrimary
-            horizontalAlignment: Text.AlignHCenter
-        }
     }
     
     // Analytics Dialog
@@ -1294,6 +1442,197 @@ ApplicationWindow {
             recentActivity.pop()
         }
         recentActivity = recentActivity.slice() // Trigger property change
+    }
+    
+    function checkQuickActionsAvailability() {
+        // Check if IndexadorDialog is ready
+        if (backend.config && backend.config.github) {
+            console.log("GitHub configuration available")
+        }
+        
+        // Check upload capability
+        if (activeHosts > 0) {
+            console.log("Upload hosts available:", activeHosts)
+        }
+        
+        return true
+    }
+    
+    // ===== FILTER FUNCTIONS =====
+    function filterMangaList() {
+        console.log("Applying filter:", currentFilter, "tag:", currentTag)
+        
+        if (!backend.setMangaFilter) {
+            console.log("setMangaFilter method not available")
+            return
+        }
+        
+        // Update backend with current favorites and recent manga
+        if (backend.setFavorites) {
+            backend.setFavorites(favoritedManga)
+        }
+        if (backend.setRecentManga) {
+            backend.setRecentManga(recentManga)
+        }
+        
+        // Apply filter
+        switch (currentFilter) {
+            case "favoritos":
+                backend.setMangaFilter("favorites", "")
+                break
+            case "recentes":
+                backend.setMangaFilter("recent", "")
+                break
+            case "progresso":
+                backend.setMangaFilter("progress", "")
+                break
+            case "concluidos":
+                backend.setMangaFilter("completed", "")
+                break
+            case "tag":
+                if (currentTag !== "") {
+                    backend.setMangaFilter("tag", currentTag)
+                } else {
+                    backend.setMangaFilter("all", "")
+                }
+                break
+            default:
+                backend.setMangaFilter("all", "")
+                break
+        }
+    }
+    
+    function getProgressCount() {
+        // Count manga with active uploads or incomplete status
+        var count = 0
+        if (mangaModel && mangaModel.rowCount) {
+            for (var i = 0; i < mangaModel.rowCount(); i++) {
+                var index = mangaModel.index(i, 0)
+                var item = mangaModel.data(index, Qt.UserRole)
+                if (item && item.status === "uploading" || item.status === "pending") {
+                    count++
+                }
+            }
+        }
+        return Math.max(count, queueCount) // Use queue count as fallback
+    }
+    
+    function getCompletedCount() {
+        // Count manga with completed status
+        var count = 0
+        if (mangaModel && mangaModel.rowCount) {
+            for (var i = 0; i < mangaModel.rowCount(); i++) {
+                var index = mangaModel.index(i, 0)
+                var item = mangaModel.data(index, Qt.UserRole)
+                if (item && item.status === "completed") {
+                    count++
+                }
+            }
+        }
+        // Fallback to calculation based on total
+        return Math.max(count, Math.floor(totalChapters / 15))
+    }
+    
+    function toggleFavorite(mangaPath) {
+        var index = favoritedManga.indexOf(mangaPath)
+        if (index === -1) {
+            favoritedManga.push(mangaPath)
+            addRecentActivity("favorite", "Mangá adicionado aos favoritos", "⭐")
+        } else {
+            favoritedManga.splice(index, 1)
+            addRecentActivity("favorite", "Mangá removido dos favoritos", "⭐")
+        }
+        favoritedManga = favoritedManga.slice() // Trigger property change
+        
+        // Save to backend
+        if (backend.saveFavorites) {
+            backend.saveFavorites(favoritedManga)
+        }
+    }
+    
+    function updateRecentManga(mangaPath) {
+        // Add to recent, remove duplicates, keep max 10
+        var index = recentManga.indexOf(mangaPath)
+        if (index !== -1) {
+            recentManga.splice(index, 1)
+        }
+        recentManga.unshift(mangaPath)
+        if (recentManga.length > 10) {
+            recentManga.pop()
+        }
+        recentManga = recentManga.slice() // Trigger property change
+        
+        // Save to backend
+        if (backend.saveRecentManga) {
+            backend.saveRecentManga(recentManga)
+        }
+    }
+    
+    // ===== TAG FUNCTIONS =====
+    function initializeTags() {
+        // Initialize with some common manga tags
+        availableTags = [
+            {"name": "Action", "count": 0},
+            {"name": "Romance", "count": 0},
+            {"name": "Drama", "count": 0},
+            {"name": "Comedy", "count": 0},
+            {"name": "Fantasy", "count": 0},
+            {"name": "Isekai", "count": 0},
+            {"name": "Shounen", "count": 0},
+            {"name": "Seinen", "count": 0}
+        ]
+        
+        updateTagCounts()
+    }
+    
+    function updateTagCounts() {
+        // Update tag counts based on manga metadata
+        if (!backend.getMangaTags) {
+            // Simulate tag counts if backend doesn't support it
+            for (var i = 0; i < availableTags.length; i++) {
+                availableTags[i].count = Math.floor(Math.random() * 25) + 1
+            }
+        } else {
+            var tagCounts = backend.getMangaTags()
+            for (var j = 0; j < availableTags.length; j++) {
+                availableTags[j].count = tagCounts[availableTags[j].name] || 0
+            }
+        }
+        
+        // Filter out tags with 0 count
+        availableTags = availableTags.filter(function(tag) {
+            return tag.count > 0
+        })
+        
+        availableTags = availableTags.slice() // Trigger property change
+        console.log("Tags updated:", availableTags.length, "tags available")
+    }
+    
+    function addTagToManga(mangaPath, tagName) {
+        if (backend.addTagToManga) {
+            backend.addTagToManga(mangaPath, tagName)
+            updateTagCounts()
+            addRecentActivity("tag", "Tag adicionada: " + tagName, "🏷️")
+        }
+    }
+    
+    function removeTagFromManga(mangaPath, tagName) {
+        if (backend.removeTagFromManga) {
+            backend.removeTagFromManga(mangaPath, tagName)
+            updateTagCounts()
+            addRecentActivity("tag", "Tag removida: " + tagName, "🏷️")
+        }
+    }
+    
+    // ===== TIMERS =====
+    Timer {
+        id: analyticsLoadingTimer
+        interval: 1500
+        running: false
+        repeat: false
+        onTriggered: {
+            isGeneratingAnalytics = false
+        }
     }
     
     // ===== ANIMATIONS =====

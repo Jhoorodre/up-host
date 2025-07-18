@@ -140,7 +140,7 @@ Rectangle {
                         anchors.margins: 1
                         source: mangaData ? mangaData.coverUrl || "" : ""
                         fillMode: Image.PreserveAspectCrop
-                        visible: mangaData && mangaData.coverUrl
+                        visible: mangaData && mangaData.coverUrl && mangaData.coverUrl !== ""
                         smooth: true
                         cache: true
                         asynchronous: true
@@ -357,6 +357,8 @@ Rectangle {
                     
                     onChapterEditClicked: function(name) {
                         console.log("Edit chapter:", name)
+                        // Open chapter metadata editor
+                        root.chapterEditRequested(name)
                     }
                     
                     onUploadSelected: {
@@ -615,4 +617,5 @@ Rectangle {
     signal uploadChaptersClicked()
     signal uploadSingleChapter(string chapterName)
     signal editChapter(string chapterName)
+    signal chapterEditRequested(string chapterName)
 }

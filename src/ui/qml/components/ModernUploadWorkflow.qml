@@ -29,6 +29,16 @@ Rectangle {
     property var completedJobs: []
     property var failedJobs: []
     
+    // ===== HOST MODEL =====
+    property var hostModel: [
+        {"name": "Catbox", "enabled": true, "configured": true},
+        {"name": "Imgur", "enabled": false, "configured": false},
+        {"name": "ImgBB", "enabled": true, "configured": true},
+        {"name": "Gofile", "enabled": false, "configured": false},
+        {"name": "Pixeldrain", "enabled": false, "configured": false},
+        {"name": "Imgbox", "enabled": true, "configured": true}
+    ]
+    
     // ===== ERROR HANDLING =====
     property string errorMessage: ""
     property string errorDetails: ""
@@ -513,22 +523,22 @@ Rectangle {
                             model: hostModel
                             
                             HostCard {
-                                hostName: model.name
-                                hostIcon: getHostIcon(model.name)
-                                selected: selectedHost === model.name
-                                enabled: model.enabled
-                                status: model.status || "Ativo"
+                                hostName: modelData.name || ""
+                                hostIcon: getHostIcon(modelData.name || "")
+                                selected: selectedHost === (modelData.name || "")
+                                enabled: modelData.enabled || false
+                                status: modelData.status || "Ativo"
                                 
                                 onClicked: {
-                                    if (model.enabled) {
-                                        selectedHost = model.name
+                                    if (modelData.enabled) {
+                                        selectedHost = modelData.name
                                         // Load host-specific settings
-                                        loadHostSettings(model.name)
+                                        loadHostSettings(modelData.name)
                                     }
                                 }
                                 
                                 onConfigClicked: {
-                                    openHostConfig(model.name)
+                                    openHostConfig(modelData.name)
                                 }
                             }
                         }
@@ -675,7 +685,7 @@ Rectangle {
                             }
                             
                             Text {
-                                text: hostSettings.workers.toString()
+                                text: hostSettings && hostSettings.workers ? hostSettings.workers.toString() : "5"
                                 font.pixelSize: ds.text_sm
                                 color: ds.textSecondary
                             }
@@ -1488,8 +1498,8 @@ Rectangle {
     }
     
     function getChapterValidationColor() {
-        if (getSelectedChapterCount() === 0) return ds.warningBg
-        return ds.successBg
+        if (getSelectedChapterCount() === 0) return ds.bgCard || "#fef3c7"
+        return ds.bgCard || "#dcfce7"
     }
     
     function getChapterValidationBorderColor() {
@@ -1533,9 +1543,8 @@ Rectangle {
     
     function getHostStatus(hostName) {
         // Get status from hostModel
-        for (var i = 0; i < hostModel.rowCount(); i++) {
-            var index = hostModel.index(i, 0)
-            var item = hostModel.data(index, Qt.UserRole)
+        for (var i = 0; i < hostModel.length; i++) {
+            var item = hostModel[i]
             if (item && item.name === hostName) {
                 return item.enabled ? "Ativo" : "Inativo"
             }
@@ -1905,15 +1914,15 @@ Rectangle {
         height: 60
         radius: ds.radius_md
         color: {
-            if (!enabled) return ds.bgDisabled
-            if (selected) return ds.accent
-            if (mouseArea.containsMouse) return ds.hover
-            return ds.bgSurface
+            if (!enabled) return ds.bgSurface || "#f3f4f6"
+            if (selected) return ds.accent || "#3b82f6"
+            if (mouseArea.containsMouse) return ds.hover || "#e5e7eb"
+            return ds.bgCard || "#ffffff"
         }
         border.color: {
-            if (!enabled) return ds.borderDisabled
-            if (selected) return ds.accent
-            return ds.border
+            if (!enabled) return ds.border || "#d1d5db"
+            if (selected) return ds.accent || "#3b82f6"
+            return ds.border || "#d1d5db"
         }
         border.width: selected ? 3 : 1
         opacity: enabled ? 1.0 : 0.6

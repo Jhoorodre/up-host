@@ -278,9 +278,9 @@ Rectangle {
         anchors.right: parent.right
         anchors.rightMargin: ds.space1
         
-        text: maxLength > 0 ? text.length + "/" + maxLength : text.length
+        text: maxLength > 0 ? root.text.length + "/" + maxLength : root.text.length
         font.pixelSize: ds.text_xs
-        color: (maxLength > 0 && text.length > maxLength * 0.8) ? ds.warning : ds.textSecondary
+        color: (maxLength > 0 && root.text.length > maxLength * 0.8) ? ds.warning : ds.textSecondary
         visible: showCharacterCount
     }
     

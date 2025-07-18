@@ -13,52 +13,8 @@ Rectangle {
     DesignSystem { id: ds }
     
     // ===== PUBLIC PROPERTIES =====
-    property var notifications: [
-        {
-            id: "notif_1",
-            type: "success",
-            icon: "🟢",
-            title: "UPLOAD CONCLUÍDO",
-            message: "Tower of God Cap. 471 enviado com sucesso para Catbox",
-            details: "📁 23 imagens • 🔗 Album: https://catbox.moe/c/abc123",
-            timestamp: "2 min",
-            unread: true,
-            actions: []
-        },
-        {
-            id: "notif_2", 
-            type: "warning",
-            icon: "🟡",
-            title: "AVISO CDN",
-            message: "JSDelivr CDN com 3 min de atraso para Solo Leveling",
-            details: "🔄 Tentando novamente...",
-            timestamp: "15 min",
-            unread: true,
-            actions: ["Ver detalhes"]
-        },
-        {
-            id: "notif_3",
-            type: "success",
-            icon: "🟢", 
-            title: "INDEXADOR ATUALIZADO",
-            message: "Index.json gerado com 4 obras • 471 capítulos",
-            details: "📤 Enviado para GitHub automaticamente",
-            timestamp: "1 hora",
-            unread: false,
-            actions: []
-        },
-        {
-            id: "notif_4",
-            type: "error",
-            icon: "🔴",
-            title: "ERRO DE UPLOAD",
-            message: "Falha ao enviar Naruto Cap. 715 para ImgBB",
-            details: "❌ API Key inválida",
-            timestamp: "2 horas",
-            unread: false,
-            actions: ["Corrigir", "Tentar novamente"]
-        }
-    ]
+    property var notifications: []
+    property int unreadCount: 0
     
     property var notificationSettings: {
         "uploads_completed": true,
@@ -432,14 +388,6 @@ Rectangle {
         }
     }
     
-    function markAllAsRead() {
-        for (var i = 0; i < notifications.length; i++) {
-            notifications[i].unread = false
-        }
-        // Trigger UI update
-        notificationsChanged()
-        console.log("All notifications marked as read")
-    }
     
     function markNotificationAsRead(notificationId) {
         for (var i = 0; i < notifications.length; i++) {
@@ -448,8 +396,7 @@ Rectangle {
                 break
             }
         }
-        // Trigger UI update
-        notificationsChanged()
+        notifications = notifications.slice() // Trigger property change
         console.log("Notification marked as read:", notificationId)
     }
     
@@ -460,8 +407,7 @@ Rectangle {
                 break
             }
         }
-        // Trigger UI update
-        notificationsChanged()
+        notifications = notifications.slice() // Trigger property change
         console.log("Notification dismissed:", notificationId)
     }
     
@@ -500,7 +446,7 @@ Rectangle {
         }
         
         notifications.unshift(newNotification)
-        notificationsChanged()
+        notifications = notifications.slice() // Trigger property change
     }
     
     function getNotificationIcon(type) {
@@ -512,6 +458,82 @@ Rectangle {
         }
     }
     
-    // ===== SIGNALS =====
-    signal notificationsChanged()
+    function loadNotifications() {
+        console.log("Loading notifications from backend...")
+        
+        if (backend.getNotifications) {
+            notifications = backend.getNotifications()
+        } else {
+            // Generate demo notifications
+            generateDemoNotifications()
+        }
+        
+        updateUnreadCount()
+    }
+    
+    function generateDemoNotifications() {
+        notifications = [
+            {
+                id: "notif_1",
+                type: "success",
+                icon: "🟢",
+                title: "UPLOAD CONCLUÍDO",
+                message: "Upload finalizado com sucesso",
+                details: "📁 Todas as imagens processadas • 🔗 Links gerados",
+                timestamp: "2 min",
+                unread: true,
+                actions: []
+            },
+            {
+                id: "notif_2",
+                type: "warning",
+                icon: "🟡",
+                title: "AVISO CDN",
+                message: "Verificação de CDN em andamento",
+                details: "🔄 Testando conectividade...",
+                timestamp: "15 min",
+                unread: true,
+                actions: ["Ver detalhes"]
+            },
+            {
+                id: "notif_3",
+                type: "success",
+                icon: "🟢",
+                title: "INDEXADOR ATUALIZADO",
+                message: "Índice JSON regenerado",
+                details: "📤 Sincronizado com GitHub",
+                timestamp: "1 hora",
+                unread: false,
+                actions: []
+            }
+        ]
+    }
+    
+    function updateUnreadCount() {
+        unreadCount = 0
+        for (var i = 0; i < notifications.length; i++) {
+            if (notifications[i].unread) {
+                unreadCount++
+            }
+        }
+    }
+    
+    function markAllAsRead() {
+        for (var i = 0; i < notifications.length; i++) {
+            notifications[i].unread = false
+        }
+        notifications = notifications.slice() // Trigger property change
+        updateUnreadCount()
+    }
+    
+    function clearAllNotifications() {
+        notifications = []
+        unreadCount = 0
+    }
+    
+    // ===== INITIALIZATION =====
+    Component.onCompleted: {
+        loadNotifications()
+    }
+    
 }

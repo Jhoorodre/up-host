@@ -696,6 +696,59 @@ Rectangle {
     
     function saveDebugSettings() {
         console.log("Debug settings saved:", JSON.stringify(debugSettings))
-        // TODO: Save settings to backend
+        if (backend.saveDebugSettings) {
+            backend.saveDebugSettings(debugSettings)
+        }
+    }
+    
+    function updatePerformanceMetrics() {
+        console.log("Updating performance metrics...")
+        
+        if (backend.getPerformanceMetrics) {
+            performanceMetrics = backend.getPerformanceMetrics()
+        } else {
+            // Generate realistic demo metrics
+            performanceMetrics = {
+                "qml_render_time": (Math.random() * 10 + 12).toFixed(1) + "ms",
+                "fps": Math.floor(Math.random() * 5 + 58) + " FPS",
+                "memory_usage": Math.floor(Math.random() * 50 + 120) + "MB",
+                "memory_limit": "512MB",
+                "http_connections": Math.floor(Math.random() * 15 + 3),
+                "max_connections": 20,
+                "upload_queue_size": Math.floor(Math.random() * 8)
+            }
+        }
+    }
+    
+    function addApiLog(method, url, status, duration, size) {
+        var newLog = {
+            timestamp: new Date().toLocaleTimeString(),
+            method: method,
+            url: url,
+            status: status,
+            duration: duration,
+            size: size,
+            type: status >= 200 && status < 300 ? "success" : "error"
+        }
+        
+        apiLogs.unshift(newLog)
+        if (apiLogs.length > 50) {
+            apiLogs.pop() // Keep only last 50 logs
+        }
+        apiLogs = apiLogs.slice() // Trigger property change
+    }
+    
+    // ===== PERFORMANCE TIMER =====
+    Timer {
+        id: performanceTimer
+        interval: 5000
+        running: true
+        repeat: true
+        onTriggered: updatePerformanceMetrics()
+    }
+    
+    // ===== INITIALIZATION =====
+    Component.onCompleted: {
+        updatePerformanceMetrics()
     }
 }

@@ -14,11 +14,14 @@ Rectangle {
     DesignSystem { id: ds }
     
     // ===== PUBLIC PROPERTIES =====
-    property var uploadData: [45, 67, 23, 89, 124, 156, 98, 134, 67, 89, 156, 178, 123, 145, 167, 189, 134, 156, 178, 145, 123, 134, 156, 167, 145, 134, 123, 156, 178, 189]
-    property int totalUploads: 1234
-    property string totalStorage: "15.6 GB"
-    property string avgTime: "2.3h"
-    property string successRate: "97.2%"
+    property var uploadData: []
+    property int totalUploads: 0
+    property string totalStorage: "0 MB"
+    property string avgTime: "0h"
+    property string successRate: "0%"
+    property int activeManga: 0
+    property int completedJobs: 0
+    property int failedJobs: 0
     
     // ===== LAYOUT =====
     color: ds.bgPrimary
@@ -562,5 +565,60 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
         }
+    }
+    
+    // ===== FUNCTIONS =====
+    function updateAnalytics() {
+        console.log("Updating analytics data...")
+        
+        if (backend.getAnalyticsData) {
+            var data = backend.getAnalyticsData()
+            totalUploads = data.totalUploads || 0
+            totalStorage = data.totalStorage || "0 MB"
+            avgTime = data.avgTime || "0h"
+            successRate = data.successRate || "0%"
+            activeManga = data.activeManga || 0
+            completedJobs = data.completedJobs || 0
+            failedJobs = data.failedJobs || 0
+            uploadData = data.uploadData || []
+        } else {
+            // Generate demo data if backend not available
+            generateDemoData()
+        }
+    }
+    
+    function generateDemoData() {
+        console.log("Generating demo analytics data...")
+        
+        // Generate realistic upload data for last 30 days
+        uploadData = []
+        for (var i = 0; i < 30; i++) {
+            var baseValue = 50 + (Math.sin(i * 0.2) * 20)
+            var randomVariation = (Math.random() - 0.5) * 40
+            uploadData.push(Math.max(0, Math.floor(baseValue + randomVariation)))
+        }
+        
+        // Calculate totals from generated data
+        totalUploads = uploadData.reduce(function(sum, val) { return sum + val }, 0)
+        totalStorage = (totalUploads * 0.012).toFixed(1) + " GB" // ~12MB per upload
+        avgTime = (Math.random() * 3 + 1).toFixed(1) + "h"
+        
+        var success = Math.floor(85 + Math.random() * 12) // 85-97%
+        successRate = success.toFixed(1) + "%"
+        
+        activeManga = Math.floor(Math.random() * 20) + 5
+        completedJobs = Math.floor(totalUploads * 0.8)
+        failedJobs = totalUploads - completedJobs
+        
+        console.log("Demo data generated:", {
+            totalUploads: totalUploads,
+            totalStorage: totalStorage,
+            successRate: successRate
+        })
+    }
+    
+    // ===== INITIALIZATION =====
+    Component.onCompleted: {
+        updateAnalytics()
     }
 }

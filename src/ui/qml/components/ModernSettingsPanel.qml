@@ -135,7 +135,10 @@ Rectangle {
                     Layout.fillWidth: true
                     
                     onClicked: {
-                        backend.saveConfig()
+                        // Apply all current settings
+                        applyDirectorySettings()
+                        
+                        // Emit signal to close settings panel
                         root.saveSettings()
                     }
                 }
@@ -194,13 +197,12 @@ Rectangle {
                                         id: mangaRootInput
                                         Layout.fillWidth: true
                                         placeholderText: "C:\\Users\\User\\Documents\\Manga"
-                                        text: backend.config ? backend.config.mangaRootPath : ""
+                                        text: ""
                                         size: "lg"
                                         
                                         onTextChanged: {
-                                            if (backend.config) {
-                                                backend.config.mangaRootPath = text
-                                            }
+                                            // Auto-save on text change
+                                            applyDirectorySettings()
                                         }
                                     }
                                     
@@ -239,13 +241,12 @@ Rectangle {
                                         id: outputFolderInput
                                         Layout.fillWidth: true
                                         placeholderText: "C:\\Users\\User\\Documents\\Manga_Output"
-                                        text: backend.config ? backend.config.outputPath : ""
+                                        text: ""
                                         size: "lg"
                                         
                                         onTextChanged: {
-                                            if (backend.config) {
-                                                backend.config.outputPath = text
-                                            }
+                                            // Auto-save on text change
+                                            applyDirectorySettings()
                                         }
                                     }
                                     
@@ -552,13 +553,12 @@ Rectangle {
                                     id: githubRepoInput
                                     Layout.fillWidth: true
                                     placeholderText: "https://github.com/username/repo"
-                                    text: backend.config ? backend.config.githubRepo : ""
+                                    text: ""
                                     size: "lg"
                                     
                                     onTextChanged: {
-                                        if (backend.config) {
-                                            backend.config.githubRepo = text
-                                        }
+                                        // Auto-save on text change
+                                        applyDirectorySettings()
                                     }
                                 }
                             }
@@ -579,14 +579,13 @@ Rectangle {
                                     id: githubTokenInput
                                     Layout.fillWidth: true
                                     placeholderText: "ghp_xxxxxxxxxxxxxxxxxxxx"
-                                    text: backend.config ? backend.config.githubToken : ""
+                                    text: ""
                                     size: "lg"
-                                    echoMode: TextInput.Password
+                                    inputType: "password"
                                     
                                     onTextChanged: {
-                                        if (backend.config) {
-                                            backend.config.githubToken = text
-                                        }
+                                        // Auto-save on text change
+                                        applyDirectorySettings()
                                     }
                                 }
                             }
@@ -1294,7 +1293,7 @@ Rectangle {
                         id: apiKeyInput
                         Layout.fillWidth: true
                         placeholderText: "Cole sua chave da API aqui..."
-                        echoMode: TextInput.Password
+                        inputType: "password"
                         size: "lg"
                         
                         // Visual feedback for API key validation
@@ -1333,13 +1332,13 @@ Rectangle {
                         }
                         
                         ModernButton {
-                            text: apiKeyInput.echoMode === TextInput.Password ? "👁️ Mostrar" : "🙈 Ocultar"
+                            text: apiKeyInput.inputType === "password" ? "👁️ Mostrar" : "🙈 Ocultar"
                             variant: "ghost"
                             size: "sm"
                             
                             onClicked: {
-                                apiKeyInput.echoMode = apiKeyInput.echoMode === TextInput.Password ? 
-                                                     TextInput.Normal : TextInput.Password
+                                apiKeyInput.inputType = apiKeyInput.inputType === "password" ? 
+                                                       "text" : "password"
                             }
                         }
                     }
@@ -1367,12 +1366,21 @@ Rectangle {
                             color: ds.textSecondary
                         }
                         
-                        SpinBox {
-                            id: rateLimitSpinBox
-                            from: 1
-                            to: 10
-                            value: 2
-                            suffix: "s"
+                        RowLayout {
+                            spacing: ds.space2
+                            
+                            SpinBox {
+                                id: rateLimitSpinBox
+                                from: 1
+                                to: 10
+                                value: 2
+                            }
+                            
+                            Text {
+                                text: "segundos"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
                         }
                     }
                 }
@@ -1530,12 +1538,25 @@ Rectangle {
     
     // ===== HELPER FUNCTIONS =====
     function refreshSettings() {
-        // Force refresh of all input bindings
-        if (backend.config) {
-            mangaRootInput.text = backend.config.mangaRootPath || ""
-            outputFolderInput.text = backend.config.outputPath || ""
-            githubRepoInput.text = backend.config.githubRepo || ""
-            githubTokenInput.text = backend.config.githubToken || ""
+        console.log("Refreshing settings from backend...")
+        
+        // Get current configuration from backend
+        if (backend.getCurrentConfig) {
+            var config = backend.getCurrentConfig()
+            
+            // Update directory settings
+            if (config.root_folder) mangaRootInput.text = config.root_folder
+            if (config.output_folder) outputFolderInput.text = config.output_folder
+            
+            // Update GitHub settings
+            if (config.github) {
+                githubRepoInput.text = config.github.repo || ""
+                githubTokenInput.text = config.github.token || ""
+            }
+            
+            console.log("Settings refreshed successfully")
+        } else {
+            console.warn("backend.getCurrentConfig() not available")
         }
     }
     
@@ -1618,8 +1639,26 @@ Rectangle {
     function applyDirectorySettings() {
         console.log("Applying directory settings...")
         
-        // Save current configuration
-        backend.saveConfig()
+        // Prepare configuration update
+        var configUpdate = {
+            "rootFolder": mangaRootInput.text,
+            "outputFolder": outputFolderInput.text,
+            "github": {
+                "repo": githubRepoInput.text,
+                "token": githubTokenInput.text
+            }
+        }
+        
+        // Update configuration via backend
+        if (backend.updateConfig) {
+            backend.updateConfig(configUpdate)
+            console.log("Configuration updated")
+        }
+        
+        // Save configuration
+        if (backend.saveConfig) {
+            backend.saveConfig()
+        }
         
         // Refresh manga list with new root path
         if (backend.refreshMangaList) {

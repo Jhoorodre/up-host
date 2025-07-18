@@ -379,7 +379,7 @@ Rectangle {
     
     // ===== CLOSE POPUP ON OUTSIDE CLICK =====
     MouseArea {
-        anchors.fill: parent.parent
+        anchors.fill: parent
         enabled: dropdownPopup.visible
         onClicked: {
             if (!root.contains(Qt.point(mouse.x, mouse.y))) {

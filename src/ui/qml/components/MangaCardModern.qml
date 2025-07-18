@@ -17,6 +17,7 @@ Rectangle {
     property string status: ""
     property bool selected: false
     property bool hovered: false
+    property bool isFavorited: false
     
     // ===== DESIGN SYSTEM =====
     DesignSystem { id: ds }
@@ -135,7 +136,7 @@ Rectangle {
                     color: ds.accent
                     
                     SequentialAnimation on rotation {
-                        running: parent.visible
+                        running: parent && parent.visible && coverImage.status === Image.Loading
                         loops: Animation.Infinite
                         NumberAnimation { from: 0; to: 360; duration: 1000 }
                     }
@@ -297,6 +298,34 @@ Rectangle {
                     }
                 }
                 
+                // Favorite action
+                Rectangle {
+                    width: ds.space6
+                    height: ds.space6
+                    radius: ds.radius_sm
+                    color: isFavorited ? ds.warning : (favoriteMouseArea.containsMouse ? ds.warning : ds.bgCard)
+                    border.color: isFavorited ? ds.warning : ds.border
+                    border.width: 1
+                    
+                    Text {
+                        anchors.centerIn: parent
+                        text: isFavorited ? "⭐" : "☆"
+                        font.pixelSize: ds.text_xs
+                        color: isFavorited ? ds.textPrimary : (parent.color === ds.bgCard ? ds.textSecondary : ds.textPrimary)
+                    }
+                    
+                    MouseArea {
+                        id: favoriteMouseArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        
+                        onClicked: {
+                            root.favoriteClicked()
+                        }
+                    }
+                }
+                
                 Item { Layout.fillWidth: true }
             }
         }
@@ -322,7 +351,7 @@ Rectangle {
         onEntered: root.hovered = true
         onExited: root.hovered = false
         
-        onClicked: {
+        onClicked: function(mouse) {
             if (mouse.button === Qt.LeftButton) {
                 root.clicked()
             } else if (mouse.button === Qt.RightButton) {
@@ -361,6 +390,7 @@ Rectangle {
     signal doubleClicked()
     signal uploadClicked()
     signal editClicked()
+    signal favoriteClicked()
     
     // ===== ACCESSIBILITY =====
     Accessible.role: Accessible.Button

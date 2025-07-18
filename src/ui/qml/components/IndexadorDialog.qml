@@ -17,6 +17,14 @@ Dialog {
     property string cdnStatus: "ativo"
     property string version: "v2.1"
     
+    // Group configuration
+    property string groupDescription: ""
+    property string groupWebsite: ""
+    property string groupContact: ""
+    property string groupLanguage: "pt"
+    property string groupType: "scanlation"
+    property bool groupActive: true
+    
     // ===== DIALOG SETUP =====
     width: Math.min(window.width * 0.95, 1200)
     height: Math.min(window.height * 0.95, 800)
@@ -239,7 +247,7 @@ Dialog {
                         title: "GERAR"
                         subtitle: "Local"
                         icon: "🔄"
-                        color: ds.accent
+                        cardColor: ds.accent
                         enabled: !isGenerating
                         loading: isGenerating
                         
@@ -253,7 +261,7 @@ Dialog {
                         title: "GITHUB"
                         subtitle: "Upload"
                         icon: "📤"
-                        color: ds.success
+                        cardColor: ds.success
                         enabled: !isSyncing
                         loading: isSyncing
                         
@@ -267,7 +275,7 @@ Dialog {
                         title: "VALIDAR"
                         subtitle: "CDNs"
                         icon: "🔍"
-                        color: ds.warning
+                        cardColor: ds.warning
                         enabled: !isValidating
                         loading: isValidating
                         
@@ -281,7 +289,7 @@ Dialog {
                         title: "COPIAR"
                         subtitle: "JSON"
                         icon: "📋"
-                        color: ds.brandSecondary
+                        cardColor: ds.brandSecondary
                         
                         onClicked: {
                             copyJsonToClipboard()
@@ -474,7 +482,7 @@ Dialog {
         property string title: ""
         property string subtitle: ""
         property string icon: ""
-        property color color: ds.accent
+        property color cardColor: ds.accent
         property bool enabled: true
         property bool loading: false
         
@@ -483,8 +491,8 @@ Dialog {
         Layout.fillWidth: true
         Layout.preferredHeight: 70
         radius: ds.radius_md
-        color: enabled ? (mouseArea.containsMouse ? Qt.lighter(parent.color, 1.1) : parent.color) : ds.bgDisabled
-        border.color: parent.color
+        color: enabled ? (mouseArea.containsMouse ? Qt.lighter(cardColor, 1.1) : cardColor) : ds.bgDisabled
+        border.color: cardColor
         border.width: 2
         opacity: enabled ? 1.0 : 0.6
         
@@ -747,8 +755,13 @@ Dialog {
                             
                             ModernInput {
                                 Layout.fillWidth: true
+                                text: groupDescription
                                 placeholderText: "Descrição do grupo"
                                 size: "lg"
+                                
+                                onTextChanged: {
+                                    groupDescription = text
+                                }
                             }
                             
                             Text {
@@ -759,8 +772,174 @@ Dialog {
                             
                             ModernInput {
                                 Layout.fillWidth: true
+                                text: groupWebsite
                                 placeholderText: "https://seusite.com"
                                 size: "lg"
+                                
+                                onTextChanged: {
+                                    groupWebsite = text
+                                }
+                            }
+                            
+                            Text {
+                                text: "Contato:"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
+                            
+                            ModernInput {
+                                Layout.fillWidth: true
+                                text: groupContact
+                                placeholderText: "email@grupo.com ou Discord"
+                                size: "lg"
+                                
+                                onTextChanged: {
+                                    groupContact = text
+                                }
+                            }
+                            
+                            Text {
+                                text: "Idioma Principal:"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
+                            
+                            ModernDropdown {
+                                Layout.fillWidth: true
+                                currentValue: groupLanguage
+                                model: ["pt", "en", "es", "fr", "it", "de", "ja", "ko"]
+                                
+                                onSelectionChanged: {
+                                    groupLanguage = currentValue
+                                }
+                            }
+                            
+                            Text {
+                                text: "Tipo de Grupo:"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
+                            
+                            ModernDropdown {
+                                Layout.fillWidth: true
+                                currentValue: groupType
+                                model: ["scanlation", "translation", "raw", "publisher"]
+                                
+                                onSelectionChanged: {
+                                    groupType = currentValue
+                                }
+                            }
+                        }
+                    }
+                    
+                    // GitHub and JSON Configuration
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: ds.space3
+                        
+                        Text {
+                            text: "🔗 CONFIGURAÇÕES DE PUBLICAÇÃO"
+                            font.pixelSize: ds.text_base
+                            font.weight: ds.fontBold
+                            color: ds.textPrimary
+                        }
+                        
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: ds.space4
+                            rowSpacing: ds.space3
+                            
+                            Text {
+                                text: "Repositório GitHub:"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
+                            
+                            ModernInput {
+                                Layout.fillWidth: true
+                                text: backend.config ? (backend.config.github ? backend.config.github.repo : "") : ""
+                                placeholderText: "usuario/repositorio"
+                                size: "lg"
+                                readOnly: true
+                            }
+                            
+                            Text {
+                                text: "CDN Base URL:"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
+                            
+                            ModernInput {
+                                Layout.fillWidth: true
+                                text: "https://cdn.jsdelivr.net/gh/" + (backend.config ? (backend.config.github ? backend.config.github.repo : "user/repo") : "user/repo") + "@latest/"
+                                size: "lg"
+                                readOnly: true
+                            }
+                            
+                            Text {
+                                text: "Versão do JSON:"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
+                            
+                            ModernInput {
+                                Layout.fillWidth: true
+                                text: version
+                                placeholderText: "v2.1"
+                                size: "lg"
+                                
+                                onTextChanged: {
+                                    version = text
+                                }
+                            }
+                        }
+                        
+                        // Group status toggle
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: ds.space3
+                            
+                            Text {
+                                text: "Status do Grupo:"
+                                font.pixelSize: ds.text_sm
+                                color: ds.textSecondary
+                            }
+                            
+                            Rectangle {
+                                width: 60
+                                height: 30
+                                radius: 15
+                                color: groupActive ? ds.success : ds.textSecondary
+                                
+                                Rectangle {
+                                    width: 26
+                                    height: 26
+                                    radius: 13
+                                    color: "white"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    x: groupActive ? 32 : 2
+                                    
+                                    Behavior on x {
+                                        NumberAnimation {
+                                            duration: ds.animationFast
+                                            easing.type: ds.easingOut
+                                        }
+                                    }
+                                }
+                                
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: {
+                                        groupActive = !groupActive
+                                    }
+                                }
+                            }
+                            
+                            Text {
+                                text: groupActive ? "Ativo" : "Inativo"
+                                font.pixelSize: ds.text_sm
+                                color: groupActive ? ds.success : ds.textSecondary
                             }
                         }
                     }
@@ -821,14 +1000,8 @@ Dialog {
             backend.validateCdns()
         }
         
-        // Simulate validation
-        Timer {
-            interval: 2000
-            running: true
-            onTriggered: {
-                isValidating = false
-            }
-        }
+        // Start validation timer
+        cdnValidationTimer.start()
     }
     
     function copyJsonToClipboard() {
@@ -891,12 +1064,52 @@ Dialog {
     
     function saveGroupConfig() {
         console.log("Saving group config...")
+        var config = {
+            name: groupName,
+            description: groupDescription,
+            website: groupWebsite,
+            contact: groupContact,
+            language: groupLanguage,
+            type: groupType,
+            version: version,
+            active: groupActive,
+            timestamp: new Date().toISOString()
+        }
+        
         if (backend.saveGroupConfig) {
-            backend.saveGroupConfig({
-                name: groupName,
-                description: "",
-                website: ""
-            })
+            backend.saveGroupConfig(config)
+        }
+        
+        console.log("Group config saved:", JSON.stringify(config, null, 2))
+    }
+    
+    function loadGroupConfig() {
+        console.log("Loading group config...")
+        if (backend.loadGroupConfig) {
+            var config = backend.loadGroupConfig()
+            if (config) {
+                groupName = config.name || groupName
+                groupDescription = config.description || ""
+                groupWebsite = config.website || ""
+                groupContact = config.contact || ""
+                groupLanguage = config.language || "pt"
+                groupType = config.type || "scanlation"
+                version = config.version || "v2.1"
+                groupActive = config.active !== undefined ? config.active : true
+                
+                console.log("Group config loaded successfully")
+            }
+        }
+    }
+    
+    // ===== TIMERS =====
+    Timer {
+        id: cdnValidationTimer
+        interval: 2000
+        running: false
+        repeat: false
+        onTriggered: {
+            isValidating = false
         }
     }
     
@@ -905,5 +1118,6 @@ Dialog {
         if (backend.loadIndexadorData) {
             backend.loadIndexadorData()
         }
+        loadGroupConfig()
     }
 }

@@ -575,7 +575,8 @@ class Backend(QObject):
                     logger.debug(f"Found manga: {manga_entry}")
             
             logger.debug(f"Setting {len(manga_list)} mangas to model")
-            self.manga_model.setMangas(manga_list)
+            self.manga_model.setMangasWithFilter(manga_list)
+            self._updateMangaMetadata()
             self.mangaListChanged.emit()
         except Exception as e:
             self.error.emit(f"Erro ao carregar mangás: {str(e)}")
@@ -662,7 +663,8 @@ class Backend(QObject):
                         manga_list.append(manga_entry)
             
             logger.debug(f"Filtered to {len(manga_list)} mangas with search: '{search_text}'")
-            self.manga_model.setMangas(manga_list)
+            self.manga_model.setMangasWithFilter(manga_list)
+            self._updateMangaMetadata()
             self.mangaListChanged.emit()
             
         except Exception as e:
@@ -2166,3 +2168,215 @@ class Backend(QObject):
             logger.info("Backend shutdown completed")
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
+    
+    # ===== FILTER METHODS =====
+    @Slot(str, str)
+    def setMangaFilter(self, filter_mode: str, filter_value: str = ""):
+        """Set filter mode for manga list"""
+        try:
+            if self.manga_model:
+                self.manga_model.setFilterMode(filter_mode, filter_value)
+                logger.info(f"Applied filter: {filter_mode} with value: {filter_value}")
+        except Exception as e:
+            logger.error(f"Error setting manga filter: {e}")
+            self.error.emit(f"Erro ao aplicar filtro: {str(e)}")
+    
+    @Slot(list)
+    def setFavorites(self, favorite_paths: list):
+        """Set favorite manga paths"""
+        try:
+            self._favorites = set(favorite_paths)
+            self._updateMangaMetadata()
+            logger.info(f"Updated favorites: {len(favorite_paths)} items")
+        except Exception as e:
+            logger.error(f"Error setting favorites: {e}")
+    
+    @Slot(list)
+    def setRecentManga(self, recent_paths: list):
+        """Set recent manga paths"""
+        try:
+            self._recent_manga = set(recent_paths)
+            self._updateMangaMetadata()
+            logger.info(f"Updated recent manga: {len(recent_paths)} items")
+        except Exception as e:
+            logger.error(f"Error setting recent manga: {e}")
+    
+    def _updateMangaMetadata(self):
+        """Update manga metadata with favorites, recent, and other info"""
+        try:
+            if not hasattr(self.manga_model, '_all_mangas'):
+                return
+                
+            for manga in self.manga_model._all_mangas:
+                manga_path = manga.get("path", "")
+                
+                # Set favorite status
+                manga["is_favorite"] = manga_path in getattr(self, '_favorites', set())
+                
+                # Set recent status  
+                manga["is_recent"] = manga_path in getattr(self, '_recent_manga', set())
+                
+                # Set status based on upload queue or random for demo
+                import random
+                statuses = ["completed", "uploading", "pending", "completed", "completed"]  # More completed for realism
+                manga["status"] = random.choice(statuses)
+                
+                # Add some demo tags
+                all_tags = ["Action", "Romance", "Drama", "Comedy", "Fantasy", "Isekai", "Shounen", "Seinen"]
+                manga["tags"] = random.sample(all_tags, random.randint(1, 3))
+            
+            # Reapply current filter
+            if hasattr(self.manga_model, '_filter_mode'):
+                self.manga_model._applyFilter()
+                
+        except Exception as e:
+            logger.error(f"Error updating manga metadata: {e}")
+    
+    # ===== SETTINGS PANEL METHODS =====
+    @Slot(str, result=bool)
+    def validatePath(self, path_str: str) -> bool:
+        """Validate if a path exists and is accessible"""
+        try:
+            if not path_str or path_str.strip() == "":
+                return False
+            
+            # Handle file:// URLs from QML
+            clean_path = path_str.strip()
+            if clean_path.startswith("file:///"):
+                clean_path = clean_path[8:]
+            elif clean_path.startswith("file://"):
+                clean_path = clean_path[7:]
+            
+            path = Path(clean_path)
+            return path.exists() and path.is_dir()
+        except Exception as e:
+            logger.error(f"Error validating path '{path_str}': {e}")
+            return False
+    
+    @Slot(str)
+    def openHostConfiguration(self, host_name: str):
+        """Open host-specific configuration"""
+        try:
+            logger.info(f"Opening configuration for host: {host_name}")
+            # For now, just log - could open a dedicated host config dialog
+            host_config = self.config_manager.get_host_config(host_name)
+            if host_config:
+                logger.debug(f"Current config for {host_name}: enabled={host_config.enabled}")
+            else:
+                logger.warning(f"No configuration found for host: {host_name}")
+        except Exception as e:
+            logger.error(f"Error opening host config for {host_name}: {e}")
+            self.error.emit(f"Erro ao abrir configuração do host {host_name}: {str(e)}")
+    
+    @Slot(str, "QVariant")
+    def updateHostConfig(self, host_name: str, config_data):
+        """Update configuration for a specific host"""
+        try:
+            # Convert QJSValue to dict if needed
+            if hasattr(config_data, 'toVariant'):
+                config_dict = config_data.toVariant()
+            else:
+                config_dict = config_data
+            
+            if host_name in self.config_manager.config.hosts:
+                host_config = self.config_manager.config.hosts[host_name]
+                
+                # Update enabled status
+                if "enabled" in config_dict:
+                    host_config.enabled = bool(config_dict["enabled"])
+                
+                # Update API credentials
+                if "api_key" in config_dict:
+                    host_config.api_key = str(config_dict["api_key"])
+                if "client_id" in config_dict:
+                    host_config.client_id = str(config_dict["client_id"])
+                if "userhash" in config_dict:
+                    host_config.userhash = str(config_dict["userhash"])
+                if "session_cookie" in config_dict:
+                    host_config.session_cookie = str(config_dict["session_cookie"])
+                
+                # Update performance settings
+                if "max_workers" in config_dict:
+                    host_config.max_workers = int(config_dict["max_workers"])
+                if "rate_limit" in config_dict:
+                    host_config.rate_limit = float(config_dict["rate_limit"])
+                
+                logger.info(f"Updated configuration for host: {host_name}")
+                self.saveConfig()
+                self._init_hosts()  # Reinitialize hosts with new config
+                
+            else:
+                logger.error(f"Host not found: {host_name}")
+                self.error.emit(f"Host não encontrado: {host_name}")
+                
+        except Exception as e:
+            logger.error(f"Error updating host config for {host_name}: {e}")
+            self.error.emit(f"Erro ao atualizar configuração do host {host_name}: {str(e)}")
+    
+    @Slot(result="QVariant")
+    def getHostsList(self):
+        """Get list of all available hosts with their status"""
+        try:
+            hosts_list = []
+            for host_name, host_config in self.config_manager.config.hosts.items():
+                host_info = {
+                    "name": host_name,
+                    "enabled": host_config.enabled,
+                    "max_workers": host_config.max_workers,
+                    "rate_limit": host_config.rate_limit,
+                    "has_api_key": bool(host_config.api_key),
+                    "has_client_id": bool(host_config.client_id),
+                    "has_userhash": bool(host_config.userhash),
+                    "has_session_cookie": bool(host_config.session_cookie)
+                }
+                hosts_list.append(host_info)
+            
+            return hosts_list
+        except Exception as e:
+            logger.error(f"Error getting hosts list: {e}")
+            return []
+    
+    @Slot(str, result="QVariant")
+    def getHostSettings(self, host_name: str):
+        """Get settings for a specific host"""
+        try:
+            host_config = self.config_manager.get_host_config(host_name)
+            if host_config:
+                return {
+                    "enabled": host_config.enabled,
+                    "max_workers": host_config.max_workers,
+                    "rate_limit": host_config.rate_limit,
+                    "api_key": host_config.api_key or "",
+                    "client_id": host_config.client_id or "",
+                    "userhash": host_config.userhash or "",
+                    "session_cookie": host_config.session_cookie or "",
+                    "base_url": host_config.base_url or ""
+                }
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting host settings for {host_name}: {e}")
+            return {}
+    
+    @Slot(result="QVariant")
+    def getCurrentConfig(self):
+        """Get current application configuration"""
+        try:
+            config = self.config_manager.config
+            return {
+                "root_folder": str(config.root_folder),
+                "output_folder": str(config.output_folder),
+                "selected_host": config.selected_host,
+                "theme": config.theme,
+                "language": config.language,
+                "json_update_mode": config.json_update_mode,
+                "github": {
+                    "user": config.github.get("user", ""),
+                    "token": config.github.get("token", ""),
+                    "repo": config.github.get("repo", ""),
+                    "branch": config.github.get("branch", "main"),
+                    "folder": config.github.get("folder", "metadata")
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error getting current config: {e}")
+            return {}

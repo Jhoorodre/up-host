@@ -49,6 +49,61 @@ class MangaListModel(QAbstractListModel):
         self.beginResetModel()
         self._mangas = []
         self.endResetModel()
+    
+    def setFilterMode(self, mode: str, filter_value: str = ""):
+        """Set filter mode for manga list"""
+        self._filter_mode = mode
+        self._filter_value = filter_value
+        
+        # Apply filter to current data
+        if hasattr(self, '_all_mangas'):
+            self._applyFilter()
+    
+    def _applyFilter(self):
+        """Apply current filter to manga list"""
+        if not hasattr(self, '_all_mangas'):
+            return
+            
+        filtered_mangas = []
+        
+        for manga in self._all_mangas:
+            include = False
+            
+            if self._filter_mode == "all":
+                include = True
+            elif self._filter_mode == "favorites":
+                # Check if manga is in favorites (this would need to be passed from backend)
+                include = manga.get("is_favorite", False)
+            elif self._filter_mode == "recent":
+                # Check if manga is in recent list
+                include = manga.get("is_recent", False)
+            elif self._filter_mode == "progress":
+                # Check if manga has uploads in progress
+                include = manga.get("status") in ["uploading", "pending"]
+            elif self._filter_mode == "completed":
+                # Check if manga is completed
+                include = manga.get("status") == "completed"
+            elif self._filter_mode == "tag":
+                # Check if manga has the specified tag
+                manga_tags = manga.get("tags", [])
+                include = self._filter_value in manga_tags
+            
+            if include:
+                filtered_mangas.append(manga)
+        
+        self.beginResetModel()
+        self._mangas = filtered_mangas
+        self.endResetModel()
+    
+    def setMangasWithFilter(self, mangas: List[Dict[str, Any]]):
+        """Set mangas and store for filtering"""
+        self._all_mangas = mangas
+        self._filter_mode = "all"
+        self._filter_value = ""
+        
+        self.beginResetModel()
+        self._mangas = mangas
+        self.endResetModel()
 
 
 class ChapterListModel(QAbstractListModel):
