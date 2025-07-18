@@ -4,17 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Manga Uploader Pro is a modern Python application for uploading manga chapters to various image hosting services (Catbox, Imgur) with a QML-based GUI. The application features async architecture, parallel uploads, and a pluggable host system.
+Manga Uploader Pro is a modern Python application for uploading manga chapters to various image hosting services with a QML-based GUI. Features async architecture, parallel uploads, pluggable host system, and automatic JSON indexing for scanlation groups. The application generates standardized JSON catalogs compatible with manga readers like Tachiyomi.
 
 ## Common Development Commands
 
 ### Running the Application
 ```bash
-# Run from project root
+# Recommended: Run from project root
 python run.py
 
-# Or run directly from src
+# Alternative: Run directly from src
 cd src && python main.py
+
+# Debug QML issues (tests PySide6 imports and QML engine)
+python debug_qml.py
+
+# Windows batch launcher
+start_app.bat
 ```
 
 ### Development Dependencies
@@ -24,18 +30,21 @@ pip install -e ".[dev]"
 
 # Or install from requirements.txt
 pip install -r requirements.txt
+
+# Project script entry point (alternative)
+manga-uploader
 ```
 
 ### Testing
 ```bash
-# Run tests
+# Run tests (async mode auto-configured in pyproject.toml)
 pytest tests/
 
 # Run specific test file
 pytest tests/test_core.py
 
-# Run with async support (configured in pyproject.toml)
-pytest tests/ --asyncio-mode=auto
+# Run with coverage
+pytest tests/ --cov=src --cov-report=html
 ```
 
 ### Code Quality
@@ -52,10 +61,11 @@ mypy src/
 
 ### Building
 ```bash
-# Create standalone executable
+# Create standalone executable (PyInstaller with QML assets)
 python build.py
 
-# The build will be in dist/ folder
+# The build will be in dist/MangaUploaderPro.exe
+# Includes: --onefile, --windowed, QML assets, all dependencies
 ```
 
 ## Architecture Overview
@@ -65,9 +75,10 @@ python build.py
 - **src/ui/backend.py**: Qt/QML backend bridge with async services
 - **src/core/**: Business logic layer
   - **config.py**: Configuration management with Pydantic models
-  - **services/**: Core services (uploader, queue, GitHub)
-  - **hosts/**: Pluggable upload providers (Catbox, Imgur)
+  - **services/**: Core services (uploader, queue, GitHub, indexador)
+  - **hosts/**: Pluggable upload providers (10+ supported)
   - **models/**: Data models and enums
+    - **indexador.py**: Complex data structures for JSON indexing system
 
 ### Key Patterns
 - **Async Architecture**: Uses `qasync` to bridge Qt event loop with asyncio
@@ -75,6 +86,7 @@ python build.py
 - **Plugin System**: Upload hosts implement `BaseHost` interface
 - **Queue System**: Upload jobs processed via async queue with workers
 - **Configuration**: Pydantic models with automatic validation
+- **JSON Indexing**: Automatic catalog generation for scanlation groups with GitHub integration
 
 ### QML Integration
 - Backend exposed to QML via `@QmlElement` decorator
@@ -102,6 +114,19 @@ Configuration uses platform-specific paths:
 - **Linux/Mac**: `~/.config/MangaUploaderPro/config.json`
 
 Config structure follows `AppConfig` model in `config.py` with host-specific settings.
+
+## JSON Indexing System
+
+The application generates standardized JSON catalogs for scanlation groups:
+- **index.json**: Main hub catalog with series listings, statistics, and metadata
+- **reader.json**: Template for individual manga JSONs with chapter data
+- **GitHub Integration**: Automatic commit and hosting via CDN (JSDelivr)
+- **Tachiyomi Compatible**: Follows reader app standards for broad compatibility
+
+Key files:
+- `src/core/services/indexador.py`: Main indexing service
+- `src/core/models/indexador.py`: Complex Pydantic models matching real-world hub structures
+- `raw/index.json` and `raw/reader.json`: Templates and examples
 
 ## File Structure Requirements
 
@@ -145,6 +170,9 @@ Root Folder/
 - Qt 6.5+ required for QML features
 - Async operations must respect Qt's threading model
 - Configuration changes require `_init_hosts()` call to reload providers
+- Complex Pydantic models in `indexador.py` require careful validation
+- Debug QML issues with `debug_qml.py` script
+- State management via `IndexadorState` class for real-time updates
 ### Host-Specific Implementation Details
 - All hosts extend `BaseHost` with required methods: `upload_image()` and `create_album()`
 - Rate limiting configured per host via `rate_limit` and `max_workers` settings
@@ -158,3 +186,21 @@ Root Folder/
 3. Implement `upload_image()` and `create_album()` methods
 4. Add host configuration to `src/core/config.py`
 5. Register host in `src/core/hosts/__init__.py`
+
+## Important Architecture Notes
+
+### Async Event Loop Integration
+- Main thread runs Qt event loop via `qasync.QEventLoop`
+- All async operations must be compatible with Qt's threading model
+- Service layer handles async/await bridging to QML via signals
+
+### IndexadorDialog System
+- Complex dialog system in `src/ui/qml/components/IndexadorDialog.qml`
+- Manages series selection, metadata editing, and GitHub configuration
+- Real-time state updates via `IndexadorState` and Qt property bindings
+
+### Entry Points
+- `run.py`: Recommended entry point (handles Python path setup)
+- `src/main.py`: Direct entry point
+- `debug_qml.py`: For debugging QML-specific issues
+- `start_app.bat`: Windows batch launcher

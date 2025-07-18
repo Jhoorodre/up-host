@@ -17,7 +17,9 @@
       "Bash(sed:*)",
       "Bash(cd:*)",
       "Bash(pip install:*)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(timeout:*)"
     ],
     "deny": []
   }
