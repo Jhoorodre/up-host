@@ -130,51 +130,57 @@ class ImgboxHost(BaseHost):
             else:
                 logger.debug("Using anonymous upload")
             
-            # Create gallery for upload
-            gallery_title = f"Upload {filepath.stem}"
-            logger.debug(f"Creating gallery with title: {gallery_title}")
+            # Fast upload without gallery creation (OPTIMIZED)
+            logger.debug("Starting fast upload without gallery...")
             
-            # Upload using Gallery context manager
-            # Note: Current pyimgbox version doesn't support session authentication parameters
-            # Uploads will be anonymous but functional
-            gallery = pyimgbox.Gallery(title=gallery_title)
-            
-            logger.debug(f"Gallery created: {gallery}")
-            
-            # Upload the file
-            logger.debug("Starting file upload...")
-            logger.debug(f"Adding file to gallery: {filepath}")
-            
-            # Try different approaches for pyimgbox API
+            # Try direct upload first (fastest method)
             try:
-                # Method 1: Direct iteration
-                submissions = list(gallery.add([filepath]))
-            except (TypeError, RuntimeError) as e:
-                logger.debug(f"Method 1 failed: {e}, trying method 2")
+                # Method 1: Direct upload without gallery
+                submissions = list(pyimgbox.upload([filepath]))
+                logger.debug("Direct upload successful")
+            except (TypeError, RuntimeError, AttributeError) as e:
+                logger.debug(f"Direct upload failed: {e}, falling back to gallery method")
+                
+                # Fallback: Create minimal gallery
+                gallery_title = f"Upload {filepath.stem}"
+                logger.debug(f"Creating gallery with title: {gallery_title}")
+                gallery = pyimgbox.Gallery(title=gallery_title)
+                logger.debug(f"Gallery created: {gallery}")
+                
+                # Upload the file
+                logger.debug("Starting file upload...")
+                logger.debug(f"Adding file to gallery: {filepath}")
+                
+                # Try different approaches for pyimgbox API
                 try:
-                    # Method 2: Manual iteration
-                    submissions = []
-                    add_result = gallery.add([filepath])
-                    for submission in add_result:
-                        submissions.append(submission)
-                except Exception as e2:
-                    logger.debug(f"Method 2 failed: {e2}, trying method 3")
-                    # Method 3: Use asyncio to handle async generator
-                    import asyncio
-                    
-                    async def collect_submissions():
-                        result = []
-                        async for submission in gallery.add([filepath]):
-                            result.append(submission)
-                        return result
-                    
-                    # Run in the current thread
+                    # Method 1: Direct iteration
+                    submissions = list(gallery.add([filepath]))
+                except (TypeError, RuntimeError) as e:
+                    logger.debug(f"Method 1 failed: {e}, trying method 2")
                     try:
-                        loop = asyncio.get_event_loop()
-                        submissions = loop.run_until_complete(collect_submissions())
-                    except RuntimeError:
-                        # No event loop, create one
-                        submissions = asyncio.run(collect_submissions())
+                        # Method 2: Manual iteration
+                        submissions = []
+                        add_result = gallery.add([filepath])
+                        for submission in add_result:
+                            submissions.append(submission)
+                    except Exception as e2:
+                        logger.debug(f"Method 2 failed: {e2}, trying method 3")
+                        # Method 3: Use asyncio to handle async generator
+                        import asyncio
+                        
+                        async def collect_submissions():
+                            result = []
+                            async for submission in gallery.add([filepath]):
+                                result.append(submission)
+                            return result
+                        
+                        # Run in the current thread
+                        try:
+                            loop = asyncio.get_event_loop()
+                            submissions = loop.run_until_complete(collect_submissions())
+                        except RuntimeError:
+                            # No event loop, create one
+                            submissions = asyncio.run(collect_submissions())
             
             logger.debug(f"Upload submissions received: {submissions}")
             

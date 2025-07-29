@@ -29,7 +29,6 @@ ApplicationWindow {
     property var currentManga: null
     property var selectedChapters: []
     property bool isProcessing: false
-    property bool indexadorButtonHovered: false
     
     Component.onCompleted: {
         backend.loadConfig()
@@ -75,51 +74,6 @@ ApplicationWindow {
             }
             
             Item { Layout.fillWidth: true }
-            
-            // Botão Indexador
-            Rectangle {
-                Layout.preferredWidth: 100
-                Layout.preferredHeight: 32
-                color: indexadorButtonHovered ? colorSecondary : "transparent"
-                border.color: indexadorButtonHovered ? colorSecondary : colorTertiary
-                border.width: 1
-                radius: 8
-                
-                property bool indexadorButtonHovered: false
-                
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 8
-                    spacing: 6
-                    
-                    Text {
-                        text: "📋"
-                        font.pixelSize: 12
-                        color: indexadorButtonHovered ? colorPrimary : colorSecondary
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                    
-                    Label {
-                        text: "Indexador"
-                        font.pixelSize: 10
-                        font.weight: Font.Medium
-                        font.letterSpacing: 0.5
-                        color: indexadorButtonHovered ? colorPrimary : colorTertiary
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                }
-                
-                MouseArea {
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    
-                    onEntered: parent.indexadorButtonHovered = true
-                    onExited: parent.indexadorButtonHovered = false
-                    onClicked: indexadorDialog.open()
-                }
-            }
             
             Rectangle {
                 Layout.preferredWidth: 160
@@ -2719,8 +2673,4 @@ ApplicationWindow {
         }
     }
     
-    // Indexador Dialog
-    IndexadorDialog {
-        id: indexadorDialog
-    }
 }

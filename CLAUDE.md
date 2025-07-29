@@ -52,10 +52,14 @@ mypy src/
 
 ### Building
 ```bash
-# Create standalone executable
+# Create standalone executable with PyInstaller
 python build.py
 
-# The build will be in dist/ folder
+# Windows launcher script
+start_app.bat
+
+# Debug QML loading issues
+python debug_qml.py
 ```
 
 ## Architecture Overview
@@ -80,6 +84,8 @@ python build.py
 - Backend exposed to QML via `@QmlElement` decorator
 - Models use Qt's MVC pattern for data binding
 - Async operations bridged through Qt signals/slots
+- Logging configured in `main.py` with loguru (stored in `~/.manga_uploader/logs/`)
+- Event loop integration via `qasync.QEventLoop`
 
 ## Host System
 
@@ -142,9 +148,12 @@ Root Folder/
 ## Development Notes
 
 - Use `loguru` for logging (configured in `main.py`)
-- Qt 6.5+ required for QML features
+- Qt 6.5+ required for QML features  
 - Async operations must respect Qt's threading model
 - Configuration changes require `_init_hosts()` call to reload providers
+- Environment variables can be loaded via `.env` file (optional)
+- Main application entry uses `qasync` to bridge Qt and asyncio event loops
+- Upload queue workers auto-start when backend initializes
 ### Host-Specific Implementation Details
 - All hosts extend `BaseHost` with required methods: `upload_image()` and `create_album()`
 - Rate limiting configured per host via `rate_limit` and `max_workers` settings
@@ -156,5 +165,21 @@ Root Folder/
 1. Create new file in `src/core/hosts/`
 2. Extend `BaseHost` class
 3. Implement `upload_image()` and `create_album()` methods
-4. Add host configuration to `src/core/config.py`
+4. Add host configuration to `src/core/config.py` (HostConfig in AppConfig.hosts dict)
 5. Register host in `src/core/hosts/__init__.py`
+6. Update QML components if new configuration fields are needed
+
+## Indexador System
+
+The application includes an advanced JSON indexing system for scanlation groups:
+
+### Key Features
+- **GitHub Integration**: Automatic metadata upload via `src/core/services/github.py`
+- **JSON Management**: Smart merge via `src/utils/json_updater.py`
+- **Index Generation**: `src/core/models/indexador.py` contains data models
+- **CDN URLs**: Automatic JSDelivr raw.githubusercontent.com URL generation
+
+### Configuration
+- Indexador settings in `AppConfig.indexador` (Pydantic model)
+- GitHub service requires personal access token with repo permissions
+- Supports custom branch and folder structure for metadata storage

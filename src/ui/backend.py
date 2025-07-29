@@ -7,7 +7,7 @@ import httpx
 from typing import List, Dict
 
 from core.models import Manga, Chapter
-from core.services import MangaUploaderService, UploadQueue, IndexadorService
+from core.services import MangaUploaderService, UploadQueue
 from core.services.github import GitHubService
 from core.hosts import CatboxHost
 from core.config import ConfigManager
@@ -30,7 +30,6 @@ class Backend(QObject):
     configChanged = Signal()
     metadataLoaded = Signal('QVariant')
     mangaInfoChanged = Signal()
-    indexadorSeriesListChanged = Signal('QVariant')  # Lista de séries do indexador
     
     def __init__(self):
         super().__init__()
@@ -46,7 +45,6 @@ class Backend(QObject):
         
         self.github_service = GitHubService(token=token, repo=repo, branch=branch)
             
-        self.indexador_service = IndexadorService(self.config_manager, self.github_service)
         self._upload_progress = 0.0
         self._available_hosts = [
             "Catbox", "Imgur", "ImgBB", "Lensdump", 
@@ -898,6 +896,12 @@ class Backend(QObject):
             
             logger.debug(f"Upload metadata dict keys: {list(metadata_dict.keys())}")
             
+            # Fix escaped newlines in description from QML
+            if 'description' in metadata_dict and isinstance(metadata_dict['description'], str):
+                # Fix double-escaped newlines: \\n -> \n
+                metadata_dict['description'] = metadata_dict['description'].replace('\\\\n', '\n')
+                logger.debug("Fixed double-escaped newlines in description")
+            
             # Store metadata for upload
             self._upload_metadata = metadata_dict
             self.processingStarted.emit()
@@ -1568,589 +1572,59 @@ class Backend(QObject):
         if self.chapter_model:
             self.chapter_model.toggleOrder()
     
-    # === INDEXADOR PROPERTIES ===
-    
+    # Folder Structure Properties
     @Property(str, notify=configChanged)
-    def indexadorHubName(self):
-        """Nome do hub/grupo"""
-        return self.config_manager.config.indexador.hub_name
+    def folderStructure(self):
+        """Current folder structure setting"""
+        return self.config_manager.config.folder_structure
     
-    @Property(str, notify=configChanged)
-    def indexadorHubDescription(self):
-        """Descrição do hub/grupo"""
-        return self.config_manager.config.indexador.hub_description
-    
-    @Property(str, notify=configChanged)
-    def indexadorHubWebsite(self):
-        """Website do hub/grupo"""
-        return self.config_manager.config.indexador.hub_website
-    
-    @Property(str, notify=configChanged)
-    def indexadorHubSubtitle(self):
-        """Subtítulo do hub"""
-        return self.config_manager.config.indexador.hub_subtitle
-    
-    @Property(str, notify=configChanged)
-    def indexadorHubContact(self):
-        """Email de contato do hub"""
-        return self.config_manager.config.indexador.hub_contact
-    
-    @Property(str, notify=configChanged)
-    def indexadorDiscordUrl(self):
-        """URL do Discord"""
-        return self.config_manager.config.indexador.discord_url
-    
-    @Property(str, notify=configChanged)
-    def indexadorTelegramUrl(self):
-        """URL do Telegram"""
-        return self.config_manager.config.indexador.telegram_url
-    
-    @Property(str, notify=configChanged)
-    def indexadorWhatsappUrl(self):
-        """URL do WhatsApp"""
-        return self.config_manager.config.indexador.whatsapp_url
-    
-    @Property(str, notify=configChanged)
-    def indexadorTwitterUrl(self):
-        """URL do Twitter"""
-        return self.config_manager.config.indexador.twitter_url
-    
-    @Property(bool, notify=configChanged)
-    def indexadorAutoUpdate(self):
-        """Atualização automática"""
-        return self.config_manager.config.indexador.auto_update
-    
-    # Configurações Técnicas
-    @Property(str, notify=configChanged)
-    def indexadorUrlPreference(self):
-        """Preferência de URL (cdn/raw/hybrid)"""
-        return self.config_manager.config.indexador.url_preference
-    
-    @Property(str, notify=configChanged)
-    def indexadorTemplateCdn(self):
-        """Template CDN"""
-        return self.config_manager.config.indexador.template_cdn
-    
-    @Property(str, notify=configChanged)
-    def indexadorTemplateRaw(self):
-        """Template GitHub Raw"""
-        return self.config_manager.config.indexador.template_raw
-    
-    @Property(bool, notify=configChanged)
-    def indexadorCdnAutoPromote(self):
-        """Auto promoção para CDN"""
-        return self.config_manager.config.indexador.cdn_auto_promote
-    
-    @Property(bool, notify=configChanged)
-    def indexadorGithubAutoDetect(self):
-        """Auto detecção GitHub"""
-        return self.config_manager.config.indexador.github_auto_detect
-    
-    @Property(bool, notify=configChanged)
-    def indexadorGithubMonitorChanges(self):
-        """Monitorar mudanças GitHub"""
-        return self.config_manager.config.indexador.github_monitor_changes
-    
-    @Property(str, notify=configChanged)
-    def indexadorGithubSearchFolder(self):
-        """Pasta de busca no GitHub"""
-        return self.config_manager.config.indexador.github_search_folder
-    
-    @Property(bool, notify=configChanged)
-    def indexadorGithubIncludeSubfolders(self):
-        """Incluir subpastas"""
-        return self.config_manager.config.indexador.github_include_subfolders
-    
-    @Property(bool, notify=configChanged)
-    def indexadorUseSameRepo(self):
-        """Usar mesmo repositório"""
-        return self.config_manager.config.indexador.use_same_repo
-    
-    @Property(str, notify=configChanged)
-    def indexadorSpecificRepo(self):
-        """Repositório específico"""
-        return self.config_manager.config.indexador.specific_repo
-    
-    @Property(str, notify=configChanged)
-    def indexadorFolder(self):
-        """Pasta do indexador"""
-        return self.config_manager.config.indexador.indexador_folder
-    
-    @Property(bool, notify=configChanged)
-    def indexadorAutoUpload(self):
-        """Upload automático"""
-        return self.config_manager.config.indexador.auto_upload
-    
-    @Property(bool, notify=configChanged)
-    def indexadorConfirmBeforeUpload(self):
-        """Confirmar antes do upload"""
-        return self.config_manager.config.indexador.confirm_before_upload
-    
-    # === INDEXADOR SLOTS ===
+    @Property(list, constant=True)
+    def availableFolderStructures(self):
+        """Available folder structure options"""
+        return [
+            {"value": "standard", "text": "Padrão (Manga/Capítulo/imagens)", "description": "Cada capítulo em sua própria pasta"},
+            {"value": "flat", "text": "Plano (Manga/imagens)", "description": "Todas as imagens diretamente na pasta do manga"},
+            {"value": "volume_based", "text": "Por Volume (Manga/Volume/Capítulo/imagens)", "description": "Organizado por volumes e capítulos"},
+            {"value": "scan_manga_chapter", "text": "Scan-Manga-Capítulo (Scan/NomeScan/Manga/Capítulo/imagens)", "description": "Estrutura organizada por grupo de scan"},
+            {"value": "scan_manga_volume_chapter", "text": "Scan-Manga-Volume-Capítulo (Scan/NomeScan/Manga/Volume/Capítulo/imagens)", "description": "Estrutura organizada por grupo de scan com volumes"}
+        ]
     
     @Slot(str)
-    def setIndexadorHubName(self, name: str):
-        """Define nome do hub"""
-        self.config_manager.config.indexador.hub_name = name
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorHubDescription(self, description: str):
-        """Define descrição do hub"""
-        self.config_manager.config.indexador.hub_description = description
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorHubWebsite(self, website: str):
-        """Define website do hub"""
-        self.config_manager.config.indexador.hub_website = website
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorHubSubtitle(self, subtitle: str):
-        """Define subtítulo do hub"""
-        self.config_manager.config.indexador.hub_subtitle = subtitle
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorHubContact(self, contact: str):
-        """Define email de contato do hub"""
-        self.config_manager.config.indexador.hub_contact = contact
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorDiscordUrl(self, url: str):
-        """Define URL do Discord"""
-        self.config_manager.config.indexador.discord_url = url
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorTelegramUrl(self, url: str):
-        """Define URL do Telegram"""
-        self.config_manager.config.indexador.telegram_url = url
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorWhatsappUrl(self, url: str):
-        """Define URL do WhatsApp"""
-        self.config_manager.config.indexador.whatsapp_url = url
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorTwitterUrl(self, url: str):
-        """Define URL do Twitter"""
-        self.config_manager.config.indexador.twitter_url = url
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorAutoUpdate(self, enabled: bool):
-        """Define atualização automática"""
-        self.config_manager.config.indexador.auto_update = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    # Slots para Configurações Técnicas
-    @Slot(str)
-    def setIndexadorUrlPreference(self, preference: str):
-        """Define preferência de URL"""
-        self.config_manager.config.indexador.url_preference = preference
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorTemplateCdn(self, template: str):
-        """Define template CDN"""
-        self.config_manager.config.indexador.template_cdn = template
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorTemplateRaw(self, template: str):
-        """Define template GitHub Raw"""
-        self.config_manager.config.indexador.template_raw = template
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorCdnAutoPromote(self, enabled: bool):
-        """Define auto promoção CDN"""
-        self.config_manager.config.indexador.cdn_auto_promote = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorGithubAutoDetect(self, enabled: bool):
-        """Define auto detecção GitHub"""
-        self.config_manager.config.indexador.github_auto_detect = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorGithubMonitorChanges(self, enabled: bool):
-        """Define monitoramento de mudanças GitHub"""
-        self.config_manager.config.indexador.github_monitor_changes = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorGithubSearchFolder(self, folder: str):
-        """Define pasta de busca GitHub"""
-        self.config_manager.config.indexador.github_search_folder = folder
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorGithubIncludeSubfolders(self, enabled: bool):
-        """Define inclusão de subpastas"""
-        self.config_manager.config.indexador.github_include_subfolders = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorUseSameRepo(self, enabled: bool):
-        """Define uso do mesmo repositório"""
-        self.config_manager.config.indexador.use_same_repo = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorSpecificRepo(self, repo: str):
-        """Define repositório específico"""
-        self.config_manager.config.indexador.specific_repo = repo
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(str)
-    def setIndexadorFolder(self, folder: str):
-        """Define pasta do indexador"""
-        self.config_manager.config.indexador.indexador_folder = folder
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorAutoUpload(self, enabled: bool):
-        """Define upload automático"""
-        self.config_manager.config.indexador.auto_upload = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot(bool)
-    def setIndexadorConfirmBeforeUpload(self, enabled: bool):
-        """Define confirmação antes do upload"""
-        self.config_manager.config.indexador.confirm_before_upload = enabled
-        self.config_manager.save_config()
-        self.configChanged.emit()
-    
-    @Slot()
-    def generateIndexador(self):
-        """Gera indexador local"""
-        try:
-            logger.info("Generating indexador...")
+    def setFolderStructure(self, structure: str):
+        """Set folder structure and rescan current manga"""
+        if structure in ["standard", "flat", "volume_based", "scan_manga_chapter", "scan_manga_volume_chapter"]:
+            self.config_manager.config.folder_structure = structure
+            self.config_manager.save_config()
             
-            # Escaneia JSONs locais
-            output_folder = self.config_manager.config.output_folder
-            series_list = self.indexador_service.scan_local_jsons(output_folder)
+            # Rescan current manga with new structure
+            if self._current_manga:
+                self._current_manga.rescan_with_structure(structure)
+                # Update chapter list
+                self._update_chapter_list_from_current_manga()
             
-            if not series_list:
-                logger.warning("No manga JSONs found in output folder")
-                self.error.emit("Nenhum JSON de manga encontrado na pasta de saída")
-                return
-            
-            # Gera indexador
-            indexador = self.indexador_service.generate_indexador(series_list)
-            
-            # Salva localmente
-            output_file = output_folder / "indexadores" / f"index_{self.config_manager.config.indexador.hub_name or 'grupo'}.json"
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(indexador.model_dump(), f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"Indexador generated successfully: {output_file}")
-            self.processingFinished.emit()
-            
-        except Exception as e:
-            logger.error(f"Error generating indexador: {e}")
-            self.error.emit(f"Erro ao gerar indexador: {str(e)}")
+            self.configChanged.emit()
+            self.refreshMangaList()  # Refresh to reflect structure change
     
-    @Slot()
-    def scanLocalJsons(self):
-        """Escaneia JSONs locais e atualiza aba Séries"""
-        try:
-            logger.info("Scanning local JSONs...")
-            output_folder = self.config_manager.config.output_folder
-            series_list = self.indexador_service.scan_local_jsons(output_folder)
+    def _update_chapter_list_from_current_manga(self):
+        """Update chapter list from current manga"""
+        if not self._current_manga:
+            return
             
-            # Converte para formato QML
-            series_data = []
-            for series in series_list:
-                series_data.append({
-                    "id": series.id,
-                    "title": series.title,
-                    "status": "local",
-                    "chapters": series.chapters.total if hasattr(series.chapters, 'total') else 0,
-                    "url": getattr(series.data, 'url', '') if hasattr(series, 'data') else '',
-                    "lastUpdated": series.status.last_updated if hasattr(series.status, 'last_updated') else '',
-                    "included": True
-                })
-            
-            logger.info(f"Found {len(series_list)} manga JSONs")
-            self.indexadorSeriesListChanged.emit(series_data)
-            
-        except Exception as e:
-            logger.error(f"Error scanning local JSONs: {e}")
-            self.error.emit(f"Erro ao escanear JSONs locais: {str(e)}")
-    
-    @Slot()
-    def scanGithubJsons(self):
-        """Escaneia JSONs no GitHub e atualiza aba Séries"""
-        try:
-            logger.info("Scanning GitHub JSONs...")
-            asyncio.create_task(self._scan_github_async())
-            
-        except Exception as e:
-            logger.error(f"Error scanning GitHub JSONs: {e}")
-            self.error.emit(f"Erro ao escanear JSONs do GitHub: {str(e)}")
-    
-    async def _scan_github_async(self):
-        """Escaneamento assíncrono do GitHub"""
-        try:
-            repo = self.config_manager.config.github.get('repo', '')
-            search_folder = self.config_manager.config.indexador.github_search_folder
-            
-            if not repo:
-                self.error.emit("Repositório GitHub não configurado")
-                return
-            
-            series_list = await self.indexador_service.scan_github_jsons(repo, search_folder)
-            
-            # Converte para formato QML
-            series_data = []
-            for series in series_list:
-                series_data.append({
-                    "id": series.id,
-                    "title": series.title,
-                    "status": "github",
-                    "chapters": series.chapters.total if hasattr(series.chapters, 'total') else 0,
-                    "url": getattr(series.data, 'url', '') if hasattr(series, 'data') else '',
-                    "lastUpdated": series.status.last_updated if hasattr(series.status, 'last_updated') else '',
-                    "included": True
-                })
-            
-            logger.info(f"Found {len(series_list)} manga JSONs on GitHub")
-            self.indexadorSeriesListChanged.emit(series_data)
-            
-        except Exception as e:
-            logger.error(f"Error in async GitHub scan: {e}")
-            self.error.emit(f"Erro no escaneamento do GitHub: {str(e)}")
-    
-    @Slot(str)
-    def testSocialUrl(self, url: str):
-        """Testa validade de URL de rede social"""
-        try:
-            if not url:
-                self.error.emit("URL vazia")
-                return
-            
-            # Validação básica de URL
-            if not (url.startswith("http://") or url.startswith("https://")):
-                self.error.emit("URL deve começar com http:// ou https://")
-                return
-            
-            # Executa teste assíncrono
-            asyncio.create_task(self._test_url_async(url))
-            
-        except Exception as e:
-            logger.error(f"Error testing URL: {e}")
-            self.error.emit(f"Erro ao testar URL: {str(e)}")
-    
-    async def _test_url_async(self, url: str):
-        """Testa URL assincronamente"""
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.head(url, follow_redirects=True)
-                
-                if response.status_code < 400:
-                    logger.info(f"URL válida: {url} (status: {response.status_code})")
-                    # Emit success signal (seria melhor ter um signal específico)
-                    # Por enquanto usaremos processingFinished como indicador de sucesso
-                    self.processingFinished.emit()
-                else:
-                    self.error.emit(f"URL retornou erro {response.status_code}")
-                    
-        except httpx.TimeoutException:
-            self.error.emit("Timeout ao testar URL - verifique se está acessível")
-        except Exception as e:
-            logger.error(f"Error in async URL test: {e}")
-            self.error.emit(f"Erro ao acessar URL: {str(e)}")
-    
-    @Slot(str)
-    def copyToClipboard(self, text: str):
-        """Copia texto para área de transferência"""
-        try:
-            from PySide6.QtGui import QGuiApplication
-            clipboard = QGuiApplication.clipboard()
-            clipboard.setText(text)
-            logger.info("Text copied to clipboard")
-            self.processingFinished.emit()  # Indica sucesso
-        except Exception as e:
-            logger.error(f"Error copying to clipboard: {e}")
-            self.error.emit(f"Erro ao copiar para área de transferência: {str(e)}")
-    
-    @Slot(str, str)
-    def saveJsonFile(self, content: str, filename: str):
-        """Salva conteúdo JSON em arquivo"""
-        try:
-            from PySide6.QtWidgets import QFileDialog
-            from PySide6.QtCore import QStandardPaths
-            
-            # Diretório padrão para documentos
-            default_dir = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
-            default_path = f"{default_dir}/{filename}.json"
-            
-            # Abre dialog de salvamento
-            file_path, _ = QFileDialog.getSaveFileName(
-                None,
-                "Salvar Indexador JSON",
-                default_path,
-                "JSON Files (*.json);;All Files (*)"
+        chapters = []
+        for chapter in self._current_manga.chapters:
+            # Count images in this chapter
+            image_count = len(chapter.images) if chapter.images else sum(
+                1 for f in chapter.path.iterdir() 
+                if f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'}
             )
             
-            if file_path:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                logger.info(f"JSON saved to: {file_path}")
-                self.processingFinished.emit()  # Indica sucesso
-            
-        except Exception as e:
-            logger.error(f"Error saving JSON file: {e}")
-            self.error.emit(f"Erro ao salvar arquivo: {str(e)}")
+            chapters.append({
+                'name': chapter.name,
+                'path': str(chapter.path),
+                'imageCount': image_count,
+                'selected': False
+            })
+        
+        self.chapter_model.setChapters(chapters)
+        self.chapterListChanged.emit()
     
-    @Slot(result=str)
-    def generateIndexadorJson(self):
-        """Gera JSON do indexador para prévia"""
-        try:
-            # Escaneia JSONs locais
-            output_folder = self.config_manager.config.output_folder
-            series_list = self.indexador_service.scan_local_jsons(output_folder)
-            
-            # Gera indexador
-            indexador = self.indexador_service.generate_indexador(series_list)
-            
-            # Retorna JSON formatado
-            return json.dumps(indexador.model_dump(), indent=2, ensure_ascii=False)
-            
-        except Exception as e:
-            logger.error(f"Error generating indexador JSON: {e}")
-            return f'{{"error": "Erro ao gerar JSON: {str(e)}"}}'
-    
-    @Slot()
-    def checkCdnStatus(self):
-        """Verifica status das CDNs"""
-        try:
-            logger.info("Checking CDN status...")
-            asyncio.create_task(self._check_cdn_async())
-            
-        except Exception as e:
-            logger.error(f"Error checking CDN status: {e}")
-            self.error.emit(f"Erro ao verificar status CDN: {str(e)}")
-    
-    async def _check_cdn_async(self):
-        """Verificação assíncrona do status das CDNs"""
-        try:
-            self.processingStarted.emit()
-            
-            # Escaneia JSONs locais
-            output_folder = self.config_manager.config.output_folder
-            series_list = self.indexador_service.scan_local_jsons(output_folder)
-            
-            cdn_active = 0
-            cdn_failed = 0
-            
-            # Testa cada série
-            for series in series_list:
-                if hasattr(series, 'data') and hasattr(series.data, 'url'):
-                    url = series.data.url
-                    if "cdn.jsdelivr.net" in url:
-                        try:
-                            async with httpx.AsyncClient(timeout=10.0) as client:
-                                response = await client.head(url)
-                                if response.status_code < 400:
-                                    cdn_active += 1
-                                else:
-                                    cdn_failed += 1
-                        except:
-                            cdn_failed += 1
-            
-            logger.info(f"CDN Status: {cdn_active} active, {cdn_failed} failed")
-            self.processingFinished.emit()
-            
-        except Exception as e:
-            logger.error(f"Error in async CDN check: {e}")
-            self.error.emit(f"Erro na verificação CDN: {str(e)}")
-            self.processingFinished.emit()
-    
-    @Slot()
-    def uploadIndexadorToGitHub(self):
-        """Faz upload do indexador para GitHub"""
-        try:
-            logger.info("Uploading indexador to GitHub...")
-            
-            # Executa em async
-            asyncio.create_task(self._upload_indexador_async())
-            
-        except Exception as e:
-            logger.error(f"Error uploading indexador: {e}")
-            self.error.emit(f"Erro ao fazer upload do indexador: {str(e)}")
-    
-    async def _upload_indexador_async(self):
-        """Upload assíncrono do indexador"""
-        try:
-            self.processingStarted.emit()
-            
-            # Escaneia JSONs locais
-            output_folder = self.config_manager.config.output_folder
-            series_list = self.indexador_service.scan_local_jsons(output_folder)
-            
-            if not series_list:
-                self.error.emit("Nenhum JSON de manga encontrado para upload")
-                self.processingFinished.emit()
-                return
-            
-            # Gera indexador
-            indexador = self.indexador_service.generate_indexador(series_list)
-            
-            # Faz upload para GitHub
-            success = await self.indexador_service.upload_indexador_github(indexador)
-            
-            if success:
-                logger.info("Indexador uploaded successfully to GitHub")
-            else:
-                self.error.emit("Falha ao fazer upload do indexador para GitHub")
-            
-            self.processingFinished.emit()
-                
-        except Exception as e:
-            logger.error(f"Error in async upload: {e}")
-            self.error.emit(f"Erro no upload assíncrono: {str(e)}")
-            self.processingFinished.emit()
-    
-    async def shutdown(self):
-        """Gracefully shutdown all async services"""
-        try:
-            if hasattr(self, 'upload_queue'):
-                await self.upload_queue.stop()
-            if hasattr(self, 'indexador_service'):
-                await self.indexador_service.shutdown()
-            logger.info("Backend shutdown completed")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")

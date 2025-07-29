@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from loguru import logger
-from .models.indexador import IndexadorConfig
 
 
 class HostConfig(BaseModel):
@@ -26,6 +25,7 @@ class AppConfig(BaseModel):
     theme: str = "dark"
     language: str = "pt-BR"
     json_update_mode: str = "add"  # "add", "replace", "smart"
+    folder_structure: str = "standard"  # "standard", "flat", "volume_based", "scan_manga_chapter", "scan_manga_volume_chapter"
     
     hosts: Dict[str, HostConfig] = {
         "Catbox": HostConfig(),
@@ -47,8 +47,6 @@ class AppConfig(BaseModel):
         "branch": "main",
         "folder": "metadata"  # Default folder for JSON files
     }
-    
-    indexador: IndexadorConfig = Field(default_factory=IndexadorConfig)
 
 
 class ConfigManager:
