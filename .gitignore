@@ -58,6 +58,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+__pycache__
 
 # Qt Creator
 CMakeLists.txt.user
@@ -100,79 +101,120 @@ app-up.code-workspace
 *.bak
 *.pid
 
-# Build artifacts
+# Build artifacts and distributions  
 dist/
 *.exe
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.msi
 
-# Test data
+# Test data and temporary content
 test_manga/
 test_structure/
+MOE/
+JSON/
+*.cbz
+*.zip
 
-# Outros arquivos e pastas comuns
+# Windows Zone.Identifier files
+*:Zone.Identifier*
+
+# Project-specific files
 *.orig
 *.old
 *.backup
 *.log.*
 *.out
 *.err
-
-# Arquivos de lock de dependências
-Pipfile.lock
-poetry.lock
-
-# Arquivos de cache de notebook
-.ipynb_checkpoints/
-
-# Arquivos de configuração locais
-local_settings.py
-settings_local.py
-
-# Arquivos de dump
-*.dump
-*.dmp
-
-# Arquivos de upload temporário
 *.part
 *.upload
-
-# Arquivos de configuração de debug
-*.launch.json
-
-# Arquivos de configuração de build
-build.py
-
-# Arquivos de migração
+*.dump
+*.dmp
 *.migrate
 
-# Arquivos de backup do editor
+# Development and build files
+build.py
+debug_qml.py
+*.launch.json
+.lock-wscript
+
+# Dependency lock files
+Pipfile.lock
+poetry.lock
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Local configuration files
+local_settings.py
+settings_local.py
+config_local.json
+.claude/
+settings.local.json
+
+# Application data and logs
+logs/
+*.log
+manga_uploader_pro.egg-info/
+.manga_uploader/
+
+# Qt and QML cache
+*.qmlc
+*.jsc
+.qml/
+qml_cache/
+
+# Windows specific
+Thumbs.db
+desktop.ini
+*.lnk
+
+# macOS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Linux specific
+*~
+.directory
+
+# Python runtime files
+python*.dll
+python*.pyd
+*.pyo
+
+# IDE and editor files
+up-host.code-workspace
+*.code-workspace
+*.sublime-workspace
+*.sublime-project
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+
+# Backup files from editors
 *~
 *.bak
 *.tmp
+*.swp
+*.swo
 
-# Arquivos de lock do sistema
-.lock-wscript
+# Temporary files
+.temp/
+temp/
+tmp/
+*.pid
 
-# Arquivos de configuração do Windows
-Thumbs.db
-desktop.ini
-
-# Arquivos de configuração do Mac
-.DS_Store
-
-# Arquivos de configuração do Linux
-*~
-
-# Arquivos de configuração do Python
-python*.dll
-python*.pyd
-
-# Arquivos de configuração do projeto
-pyproject.toml
-
-# Arquivos de configuração de testes
-tests/__pycache__/
-manga_uploader_pro.egg-info
-settings.local.json
-up-host.code-workspace
-.claude
-CAUTION.txt
+# Development exports and continue files
+CONTINUE.txt
+*.continue
+export.txt
+JSON
+MOE

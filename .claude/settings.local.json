@@ -20,7 +20,9 @@
       "Bash(cp:*)",
       "Bash(ls:*)",
       "Bash(rm:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(timeout:*)",
+      "WebSearch"
     ],
     "deny": []
   }

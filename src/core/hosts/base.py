@@ -5,6 +5,7 @@ import asyncio
 from loguru import logger
 
 from core.models import UploadResult, ChapterUploadResult
+from utils.helpers import natural_sort_key
 
 
 class BaseHost(ABC):
@@ -52,25 +53,32 @@ class BaseHost(ABC):
         tasks = [upload_with_limit(img) for img in images]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Process results
+        # Process results with order preservation
         successful_uploads = []
         failed_uploads = []
         image_ids = []
         
+        # Create list of tuples (original_filename, result) to preserve order
+        upload_results = []
+        
         for i, result in enumerate(results):
+            original_file = images[i]
             if isinstance(result, Exception):
-                image_name = images[i].name
-                logger.error(f"Upload exception for {image_name}: {type(result).__name__}: {str(result)}")
-                failed_uploads.append(image_name)
+                logger.error(f"Upload exception for {original_file.name}: {type(result).__name__}: {str(result)}")
+                failed_uploads.append(original_file.name)
             elif isinstance(result, UploadResult):
                 if result.success:
-                    successful_uploads.append(result.url)
+                    upload_results.append((original_file.name, result.url))
                     # Extract ID from URL for album creation
                     image_id = result.url.split('/')[-1]
                     image_ids.append(image_id)
                 else:
                     logger.error(f"Upload failed for {result.filename}: {result.error}")
                     failed_uploads.append(result.filename)
+        
+        # Sort upload results by original filename using natural sort to ensure correct order
+        upload_results.sort(key=lambda x: natural_sort_key(x[0]))
+        successful_uploads = [url for _, url in upload_results]
         
         # Create album if we have successful uploads
         album_url = ""

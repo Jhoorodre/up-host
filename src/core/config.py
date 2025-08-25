@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -40,12 +40,15 @@ class AppConfig(BaseModel):
         "ImgPile": HostConfig(enabled=False, base_url="https://imgpile.com")
     }
     
-    github: Dict[str, str] = {
+    github: Dict[str, Any] = {
+        "enabled": False,
         "user": "",
         "token": "",
         "repo": "",
         "branch": "main",
-        "folder": "metadata"  # Default folder for JSON files
+        "folder": "metadata",  # Default folder for JSON files
+        "auto_upload": False,
+        "commit_message": "Update manga metadata"
     }
 
 
@@ -115,3 +118,4 @@ class ConfigManager:
     def get_host_config(self, host_name: str) -> Optional[HostConfig]:
         """Get configuration for a specific host"""
         return self.config.hosts.get(host_name)
+    

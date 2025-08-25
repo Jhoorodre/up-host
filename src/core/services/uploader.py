@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pathlib import Path
 from typing import List, Dict, Optional
 import json
@@ -87,12 +88,27 @@ class MangaUploaderService:
         sorted_chapters = sorted(upload_results.items(), key=lambda x: x[0])
         
         for idx, (chapter_name, result) in enumerate(sorted_chapters):
+            # Get group name from existing JSON or custom metadata
+            group_name = "default"
+            if custom_metadata and custom_metadata.get("group"):
+                group_name = custom_metadata.get("group")
+            elif existing_data := JSONUpdater.load_existing_json(final_output_path):
+                # Use existing group name from any chapter
+                for ch in existing_data.get('chapters', {}).values():
+                    if 'groups' in ch and ch['groups']:
+                        group_name = list(ch['groups'].keys())[0]
+                        break
+            
+            # Create Unix timestamp with exact upload time
+            import time
+            exact_timestamp = str(int(time.time()))
+            
             new_chapters_data[f"{idx:03d}"] = {
                 "title": chapter_name,
                 "volume": "",
-                "last_updated": str(int(asyncio.get_event_loop().time())),
+                "last_updated": exact_timestamp,
                 "groups": {
-                    "default": result.image_urls  # Use individual URLs, not album
+                    group_name: result.image_urls  # Use group name instead of "default"
                 }
             }
         
@@ -103,7 +119,6 @@ class MangaUploaderService:
                 "description": custom_metadata.get("description", manga.description),
                 "artist": custom_metadata.get("artist", manga.artist),
                 "author": custom_metadata.get("author", manga.author),
-                "group": custom_metadata.get("group", ""),
                 "cover": custom_metadata.get("cover", manga.cover_url),
                 "status": custom_metadata.get("status", manga.status.value),
                 "chapters": new_chapters_data
@@ -114,7 +129,6 @@ class MangaUploaderService:
                 "description": manga.description,
                 "artist": manga.artist,
                 "author": manga.author,
-                "group": "",
                 "cover": manga.cover_url,
                 "status": manga.status.value,
                 "chapters": new_chapters_data

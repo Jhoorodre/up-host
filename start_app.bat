@@ -1,8 +1,8 @@
 @echo off
-REM Ativa o ambiente virtual se necessário (remova esta linha se não usar venv)
-REM call venv\Scripts\activate
+REM Script para executar o Manga Uploader Pro no WSL
+echo Executando Manga Uploader Pro...
 
-REM Executa o run.py com o Python padrão do sistema
-python run.py
+REM Ativa ambiente virtual e executa o programa
+wsl -d Ubuntu -e bash -c "cd /home/jhoorodr/Projetos/Projetos-code/up-host && source venv/bin/activate && python run.py"
 
 pause

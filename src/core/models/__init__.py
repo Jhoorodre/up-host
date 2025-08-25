@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from enum import Enum
 from pathlib import Path
+from utils.helpers import natural_sort_key
 
 
 class MangaStatus(str, Enum):
@@ -29,7 +30,7 @@ class Chapter:
         extensions = {'.jpg', '.jpeg', '.png', '.webp'}
         images = []
         if self.path.exists() and self.path.is_dir():
-            for file in sorted(self.path.iterdir()):
+            for file in sorted(self.path.iterdir(), key=lambda p: natural_sort_key(p.name)):
                 if file.suffix.lower() in extensions:
                     images.append(file)
         return images
@@ -84,7 +85,7 @@ class Manga:
     def _scan_standard_structure(self) -> List[Chapter]:
         """Standard structure: Manga/Chapter/images"""
         chapters = []
-        for item in sorted(self.path.iterdir()):
+        for item in sorted(self.path.iterdir(), key=lambda p: natural_sort_key(p.name)):
             if item.is_dir():
                 chapter = Chapter(
                     name=item.name,
@@ -99,7 +100,7 @@ class Manga:
         extensions = {'.jpg', '.jpeg', '.png', '.webp'}
         images = []
         
-        for file in sorted(self.path.iterdir()):
+        for file in sorted(self.path.iterdir(), key=lambda p: natural_sort_key(p.name)):
             if file.is_file() and file.suffix.lower() in extensions:
                 images.append(file)
         
@@ -117,11 +118,11 @@ class Manga:
         """Volume-based structure: Manga/Volume/Chapter/images"""
         chapters = []
         
-        for volume_item in sorted(self.path.iterdir()):
+        for volume_item in sorted(self.path.iterdir(), key=lambda p: natural_sort_key(p.name)):
             if volume_item.is_dir():
                 volume_name = volume_item.name
                 
-                for chapter_item in sorted(volume_item.iterdir()):
+                for chapter_item in sorted(volume_item.iterdir(), key=lambda p: natural_sort_key(p.name)):
                     if chapter_item.is_dir():
                         chapter_name = f"{volume_name} - {chapter_item.name}"
                         chapter = Chapter(
@@ -141,15 +142,15 @@ class Manga:
         # Structure: root/scan_name/manga_title/chapter/images
         # We need to find manga folders across all scan folders
         
-        for scan_item in sorted(self.path.iterdir()):
+        for scan_item in sorted(self.path.iterdir(), key=lambda p: natural_sort_key(p.name)):
             if scan_item.is_dir():  # This is a scan folder
                 scan_name = scan_item.name
                 
                 # Look for manga folders inside this scan
-                for manga_item in sorted(scan_item.iterdir()):
+                for manga_item in sorted(scan_item.iterdir(), key=lambda p: natural_sort_key(p.name)):
                     if manga_item.is_dir() and manga_item.name == self.title:
                         # Found our manga inside this scan
-                        for chapter_item in sorted(manga_item.iterdir()):
+                        for chapter_item in sorted(manga_item.iterdir(), key=lambda p: natural_sort_key(p.name)):
                             if chapter_item.is_dir():
                                 chapter_name = f"[{scan_name}] {chapter_item.name}"
                                 chapter = Chapter(
@@ -169,19 +170,19 @@ class Manga:
         # Structure: root/scan_name/manga_title/volume/chapter/images
         # We need to find manga folders across all scan folders
         
-        for scan_item in sorted(self.path.iterdir()):
+        for scan_item in sorted(self.path.iterdir(), key=lambda p: natural_sort_key(p.name)):
             if scan_item.is_dir():  # This is a scan folder
                 scan_name = scan_item.name
                 
                 # Look for manga folders inside this scan
-                for manga_item in sorted(scan_item.iterdir()):
+                for manga_item in sorted(scan_item.iterdir(), key=lambda p: natural_sort_key(p.name)):
                     if manga_item.is_dir() and manga_item.name == self.title:
                         # Found our manga inside this scan
-                        for volume_item in sorted(manga_item.iterdir()):
+                        for volume_item in sorted(manga_item.iterdir(), key=lambda p: natural_sort_key(p.name)):
                             if volume_item.is_dir():
                                 volume_name = volume_item.name
                                 
-                                for chapter_item in sorted(volume_item.iterdir()):
+                                for chapter_item in sorted(volume_item.iterdir(), key=lambda p: natural_sort_key(p.name)):
                                     if chapter_item.is_dir():
                                         chapter_name = f"[{scan_name}] {volume_name} - {chapter_item.name}"
                                         chapter = Chapter(

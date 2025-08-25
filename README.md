@@ -29,6 +29,17 @@ Aplicação moderna e profissional para upload de mangás com interface QML, arq
 - 🛠️ **Build system** com PyInstaller para executáveis
 - 🧪 **Testes automatizados** com pytest e async support
 
+## ⚡ Melhorias Recentes (v2.0)
+
+- ✅ **Sistema de host padrão**: Configuração persistente do provedor ativo
+- ✅ **Busca fuzzy de JSONs**: Localização inteligente de metadados existentes  
+- ✅ **Timestamps precisos**: Data/hora exata do upload nos metadados
+- ✅ **Grupos nomeados**: Substituição de "default" por nome real do grupo
+- ✅ **Interface padronizada**: Layout consistente para todos os hosts
+- ✅ **ImgBox otimizado**: Método único (async generator) para uploads
+- ✅ **Conversão automática**: WebP → JPG para compatibilidade
+- ✅ **Cleanup inteligente**: Remoção automática de arquivos temporários
+
 ## 🛠️ Hosts Suportados
 
 | Host | Status | Características |
@@ -53,9 +64,9 @@ Aplicação moderna e profissional para upload de mangás com interface QML, arq
 
 ### Instalação Rápida
 
-```powershell
+```bash
 # Clone o repositório
-git clone https://github.com/Jhoorodre/up-host.git
+git clone https://github.com/Jhoorodr/up-host.git
 cd up-host
 
 # Instale as dependências
@@ -67,7 +78,7 @@ python run.py
 
 ### Instalação para Desenvolvimento
 
-```powershell
+```bash
 # Instalar com dependências de desenvolvimento
 pip install -e ".[dev]"
 
@@ -80,12 +91,12 @@ pip install pytest pytest-asyncio black flake8 mypy PyInstaller
 
 ### Execução Básica
 
-```powershell
+```bash
 # Método 1: Script de entrada (recomendado)
 python run.py
 
 # Método 2: Executável Windows (após build)
-start_app.bat
+./start_app.bat  # Windows
 
 # Método 3: Direto do src
 cd src && python main.py
@@ -169,11 +180,14 @@ up-host/
 
 ### Criar Executável
 
-```powershell
+```bash
 # Build standalone executable
 python build.py
 
-# O executável será gerado em dist/MangaUploaderPro.exe
+# O executável será gerado em:
+# - Windows: dist/MangaUploaderPro.exe
+# - Linux: dist/MangaUploaderPro
+# - macOS: dist/MangaUploaderPro.app
 ```
 
 ### Configuração do Build
@@ -189,7 +203,7 @@ O build inclui:
 
 ### Executar Testes
 
-```powershell
+```bash
 # Todos os testes
 pytest tests/ -v
 
@@ -202,7 +216,7 @@ pytest tests/ --cov=src --cov-report=html
 
 ### Ferramentas de Qualidade
 
-```powershell
+```bash
 # Formatação de código
 black src/ tests/ --line-length 100
 

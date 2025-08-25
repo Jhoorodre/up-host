@@ -1,12 +1,29 @@
-httpx>=0.25.0
-aiofiles>=23.0.0
-aiohttp>=3.8.0
-pydantic>=2.0.0
-loguru>=0.7.0
-qasync>=0.27.0
-PySide6>=6.5.0
-PyYAML>=6.0
-Pillow>=10.0.0
-tenacity>=8.2.0
-python-dotenv>=1.0.0
-pyimgbox>=1.0.4
+# Core Dependencies
+httpx>=0.25.0          # Async HTTP client for uploads
+aiofiles>=23.0.0       # Async file operations
+aiohttp>=3.8.0         # Additional HTTP client support
+pydantic>=2.0.0        # Data validation and settings
+loguru>=0.7.0          # Advanced logging
+
+# GUI and Async
+qasync>=0.27.0         # Qt + asyncio integration
+PySide6>=6.5.0         # Qt6 bindings for Python
+
+# File and Data Processing
+PyYAML>=6.0            # YAML configuration support
+Pillow>=10.0.0         # Image processing (WebP to JPG conversion)
+python-dotenv>=1.0.0   # Environment variables support
+
+# Networking and Reliability
+tenacity>=8.2.0        # Retry mechanisms with backoff
+
+# Host-specific Dependencies
+pyimgbox>=1.0.4        # Imgbox uploader support
+
+# Optional: Development Dependencies (install with pip install -e ".[dev]")
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.0.0
+# PyInstaller>=5.0

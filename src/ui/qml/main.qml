@@ -3,7 +3,6 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Controls.Material 2.15
 import QtQuick.Dialogs
-import Qt.labs.platform 1.1 as Platform
 import "components"
 
 ApplicationWindow {
@@ -45,6 +44,13 @@ ApplicationWindow {
             } else {
                 testCookieResult.color = "#ff4444"
             }
+        }
+        
+        // BULLETPROOF: Force GitHub button refresh on manga info changes
+        function onMangaInfoChanged() {
+            console.log("🔄 MangaInfoChanged signal received - GitHub button will refresh automatically")
+            console.log("📊 Current state: hasJson=" + backend.currentMangaHasJson + ", isProcessing=" + isProcessing)
+            // QML property binding will automatically refresh the githubBtnEnabled property
         }
     }
     
@@ -126,9 +132,6 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignVCenter
                         
-                        Component.onCompleted: {
-                            currentIndex = backend.selectedHostIndex
-                        }
                         
                         Connections {
                             target: backend
@@ -139,8 +142,16 @@ ApplicationWindow {
                             }
                         }
                         
+                        property bool initializing: true
+                        
+                        Component.onCompleted: {
+                            currentIndex = backend.selectedHostIndex
+                            // Delay to ensure all initialization is complete
+                            Qt.callLater(function() { initializing = false; })
+                        }
+                        
                         onCurrentTextChanged: {
-                            if (currentText && currentText !== "") {
+                            if (!initializing && currentText && currentText !== "") {
                                 backend.setHost(currentText)
                             }
                         }
@@ -1011,7 +1022,7 @@ ApplicationWindow {
                                 }
                             }
                             
-                            // GitHub Button
+                            // GitHub Button - BULLETPROOF fix for Edit → Save → GitHub workflow
                             Rectangle {
                                 Layout.fillWidth: true
                                 height: 48
@@ -1022,6 +1033,20 @@ ApplicationWindow {
                                 visible: backend.githubRepo !== ""
                                 
                                 property bool githubBtnHovered: false
+                                // BULLETPROOF: Simplified condition - button enabled when JSON exists AND not processing
+                                property bool githubBtnEnabled: backend.currentMangaHasJson && !isProcessing && window.currentManga !== null
+                                
+                                // Debug logging to track state changes
+                                onGithubBtnEnabledChanged: {
+                                    console.log("🔍 QML GitHub Button State Changed:", 
+                                        "enabled=" + githubBtnEnabled,
+                                        "hasJson=" + backend.currentMangaHasJson, 
+                                        "isProcessing=" + isProcessing,
+                                        "currentManga=" + (window.currentManga !== null))
+                                }
+                                
+                                // Visual feedback for disabled state
+                                opacity: githubBtnEnabled ? 1.0 : 0.6
                                 
                                 RowLayout {
                                     anchors.centerIn: parent
@@ -1054,11 +1079,19 @@ ApplicationWindow {
                                     id: githubBtn
                                     anchors.fill: parent
                                     hoverEnabled: true
-                                    enabled: !isProcessing && window.currentManga && backend.currentMangaHasJson
+                                    enabled: parent.githubBtnEnabled
+                                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
                                     onEntered: parent.githubBtnHovered = true
                                     onExited: parent.githubBtnHovered = false
-                                    onClicked: backend.saveToGitHub()
+                                    onClicked: {
+                                        if (enabled) {
+                                            backend.saveToGitHub()
+                                        }
+                                    }
                                 }
+                                
+                                // Property binding automatically updates when dependencies change
+                                // No manual intervention needed - QML handles this automatically
                             }
                             
                             Item { Layout.fillHeight: true }
@@ -1344,9 +1377,6 @@ ApplicationWindow {
                                         anchors.fill: parent
                                         model: backend.availableHosts
                                         
-                                        Component.onCompleted: {
-                                            currentIndex = backend.selectedHostIndex
-                                        }
                                         
                                         Connections {
                                             target: backend
@@ -1357,8 +1387,16 @@ ApplicationWindow {
                                             }
                                         }
                                         
+                                        property bool settingsInitializing: true
+                                        
+                                        Component.onCompleted: {
+                                            currentIndex = backend.selectedHostIndex
+                                            // Delay to ensure all initialization is complete
+                                            Qt.callLater(function() { settingsInitializing = false; })
+                                        }
+                                        
                                         onCurrentTextChanged: {
-                                            if (currentText && currentText !== "") {
+                                            if (!settingsInitializing && currentText && currentText !== "") {
                                                 backend.setHost(currentText)
                                             }
                                         }
@@ -1599,26 +1637,32 @@ ApplicationWindow {
                                     color: colorSecondary
                                 }
                                 
-                                TextField {
-                                    id: imgboxSessionCookieField
+                                Rectangle {
                                     Layout.fillWidth: true
-                                    placeholderText: "Cole o cookie _imgbox_session para fazer upload na sua conta"
-                                    text: backend.imgboxSessionCookie
+                                    height: 32  // Fixed height like other hosts
                                     color: colorPrimary
-                                    font.pixelSize: 12
-                                    wrapMode: TextInput.Wrap
-                                    selectByMouse: true
+                                    border.color: colorTertiary
+                                    border.width: 1
+                                    radius: 8
                                     
-                                    background: Rectangle {
-                                        color: colorSurface
-                                        border.color: colorSecondary
-                                        border.width: 1
-                                        radius: 4
+                                    TextField {
+                                        id: imgboxSessionCookieField
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        placeholderText: "Cole o cookie _imgbox_session"
+                                        text: backend.imgboxSessionCookie
+                                        color: colorTertiary
+                                        font.pixelSize: 11
+                                        selectByMouse: true
+                                        background: Rectangle { color: "transparent" }
+                                        leftPadding: 8
+                                        rightPadding: 8
                                     }
                                 }
                                 
                                 RowLayout {
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: 30  // Fixed height to prevent expansion
                                     spacing: 8
                                     
                                     Button {
@@ -1626,6 +1670,8 @@ ApplicationWindow {
                                         text: "Testar Cookie"
                                         enabled: imgboxSessionCookieField.text.length > 0
                                         font.pixelSize: 10
+                                        Layout.preferredWidth: 100
+                                        Layout.preferredHeight: 28
                                         
                                         background: Rectangle {
                                             color: testCookieBtn.enabled ? (testCookieBtn.hovered ? "#0078d4" : "#005a9e") : "#404040"
@@ -1654,7 +1700,9 @@ ApplicationWindow {
                                         text: ""
                                         font.pixelSize: 10
                                         Layout.fillWidth: true
+                                        Layout.preferredHeight: 28
                                         wrapMode: Text.WordWrap
+                                        verticalAlignment: Text.AlignVCenter
                                     }
                                 }
                                 
@@ -2316,7 +2364,8 @@ ApplicationWindow {
                                     githubRepo: githubRepoField.text,
                                     githubBranch: githubBranchField.text,
                                     githubFolder: githubFolderCombo.currentFolder,
-                                    jsonUpdateMode: jsonUpdateModeCombo.currentValue
+                                    jsonUpdateMode: jsonUpdateModeCombo.currentValue,
+                                    selectedHost: backend.availableHosts[hostSelector.currentIndex]
                                 }
                                 backend.updateConfig(config)
                                 settingsDrawer.close()
@@ -2331,21 +2380,33 @@ ApplicationWindow {
     }
     
     // Dialogs
-    Platform.FolderDialog {
+    FolderDialog {
         id: folderDialog
         title: "Selecione a pasta dos mangás"
-        folder: backend.rootFolder ? "file:///" + backend.rootFolder : Platform.StandardPaths.homeFolder
+        currentFolder: backend.rootFolder ? "file:///" + backend.rootFolder : ""
         onAccepted: {
-            rootFolderField.text = folder.toString()
+            let pathStr = selectedFolder.toString()
+            if (pathStr.startsWith("file:///")) {
+                pathStr = pathStr.substring(8)
+            } else if (pathStr.startsWith("file://")) {
+                pathStr = pathStr.substring(7)
+            }
+            rootFolderField.text = pathStr
         }
     }
     
-    Platform.FolderDialog {
+    FolderDialog {
         id: outputFolderDialog
         title: "Selecione a pasta de saída dos metadados"
-        folder: backend.outputFolder ? "file:///" + backend.outputFolder : Platform.StandardPaths.homeFolder
+        currentFolder: backend.outputFolder ? "file:///" + backend.outputFolder : ""
         onAccepted: {
-            outputFolderField.text = folder.toString()
+            let pathStr = selectedFolder.toString()
+            if (pathStr.startsWith("file:///")) {
+                pathStr = pathStr.substring(8)
+            } else if (pathStr.startsWith("file://")) {
+                pathStr = pathStr.substring(7)
+            }
+            outputFolderField.text = pathStr
         }
     }
     
@@ -2397,6 +2458,13 @@ ApplicationWindow {
                 statusCombo.currentIndex = statusIndex >= 0 ? statusIndex : 0
                 
                 console.log("Fields updated - title:", titleField.text, "mode:", metadataDialog.isEditMode ? "edit" : "upload")
+            }
+            
+            // BULLETPROOF: Listen for metadata update completion to ensure button responsiveness
+            function onMetadataUpdateCompleted() {
+                console.log("✅ Metadata update completed - GitHub button will be automatically enabled")
+                console.log("📊 Post-save state: hasJson=" + backend.currentMangaHasJson)
+                // QML binding will automatically refresh the button state
             }
         }
         

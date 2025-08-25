@@ -55,9 +55,23 @@ class GitHubService:
             # Get current file SHA if exists
             sha = await self._get_file_sha(remote_path)
             
-            # Read file content
+            # Read file content and clean any JSON corruption
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
+            
+            # If this is a JSON file, clean any corruption before upload
+            if file_path.suffix.lower() == '.json':
+                try:
+                    import json
+                    from utils.json_updater import JSONUpdater
+                    
+                    data = json.loads(content)
+                    clean_data = JSONUpdater.clean_corrupted_json(data)
+                    content = json.dumps(clean_data, indent=2, ensure_ascii=False)
+                    logger.info("JSON cleaned before GitHub upload")
+                except Exception as e:
+                    logger.warning(f"Could not clean JSON before upload: {e}")
+                    # Continue with original content if cleaning fails
             
             # Encode content
             encoded_content = base64.b64encode(content.encode()).decode()
@@ -300,13 +314,7 @@ class GitHubService:
                 data = response.json()
                 folders = []
                 
-                # Add root option
-                if path:
-                    folders.append({
-                        "name": "..",
-                        "path": "/".join(path.split("/")[:-1]) if "/" in path else "",
-                        "type": "dir"
-                    })
+                # Don't add ".." option - it causes confusion
                 
                 # Add folders from response
                 for item in data:
@@ -326,8 +334,20 @@ class GitHubService:
             logger.error(f"Error listing GitHub folders: {e}")
             return []
     
-    async def __aenter__(self):
-        return self
+    async def close(self):
+        """Properly close the HTTP client"""
+        if self.client and not self.client.is_closed:
+            await self.client.aclose()
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.client.aclose()
+    def __del__(self):
+        """Cleanup when service is destroyed"""
+        if hasattr(self, 'client') and self.client and not self.client.is_closed:
+            # Schedule cleanup in the event loop if available
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.close())
+            except RuntimeError:
+                # No event loop available, client will be cleaned up by GC
+                pass

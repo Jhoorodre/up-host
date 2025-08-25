@@ -52,9 +52,9 @@ def main():
     engine.rootContext().setContextProperty("backend", backend)
     
     # Register models
-    engine.rootContext().setContextProperty("mangaModel", backend.manga_model)
-    engine.rootContext().setContextProperty("chapterModel", backend.chapter_model)
-    engine.rootContext().setContextProperty("githubFolderModel", backend.github_folder_model)
+    engine.rootContext().setContextProperty("mangaModel", backend.mangaModel)
+    engine.rootContext().setContextProperty("chapterModel", backend.chapterModel)
+    engine.rootContext().setContextProperty("githubFolderModel", backend.githubFolderModel)
     
     # Load QML
     qml_file = Path(__file__).parent / "ui" / "qml" / "main.qml"

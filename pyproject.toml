@@ -4,17 +4,33 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "manga-uploader-pro"
-version = "1.0.0"
-description = "Modern manga uploader with async architecture"
+version = "2.0.0"
+description = "Modern manga uploader with async architecture and 10+ hosting providers"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"},
+    {name = "Jhoorodr", email = "jhoorodr@github.com"},
+]
+keywords = ["manga", "uploader", "async", "qt", "qml", "scanlation"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+    "Topic :: Multimedia :: Graphics",
+    "Environment :: X11 Applications :: Qt"
 ]
 dependencies = [
     "httpx>=0.25.0",
     "aiofiles>=23.0.0", 
+    "aiohttp>=3.8.0",
     "pydantic>=2.0.0",
     "loguru>=0.7.0",
     "qasync>=0.27.0",
@@ -22,7 +38,8 @@ dependencies = [
     "PyYAML>=6.0",
     "Pillow>=10.0.0",
     "tenacity>=8.2.0",
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0",
+    "pyimgbox>=1.0.4"
 ]
 
 [project.optional-dependencies]
@@ -36,7 +53,13 @@ dev = [
 ]
 
 [project.scripts]
-manga-uploader = "src.main:main"
+manga-uploader-pro = "src.main:main"
+
+[project.urls]
+Homepage = "https://github.com/Jhoorodr/up-host"
+Repository = "https://github.com/Jhoorodr/up-host.git"
+Issues = "https://github.com/Jhoorodr/up-host/issues"
+Documentation = "https://github.com/Jhoorodr/up-host/blob/main/README.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

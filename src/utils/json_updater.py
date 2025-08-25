@@ -126,9 +126,28 @@ class JSONUpdater:
         return f"{max_index + 1:03d}"
     
     @staticmethod
+    def clean_corrupted_json(data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Clean corrupted JSON by removing "group" field from root level
+        Groups should only exist in chapters structure
+        """
+        cleaned_data = data.copy()
+        
+        # Remove "group" from root level if it exists
+        if "group" in cleaned_data:
+            logger.warning("DETECTED AND REMOVING corrupted 'group' field from JSON root level!")
+            logger.warning(f"Corrupted group value was: '{cleaned_data['group']}'")
+            del cleaned_data["group"]
+            logger.success("JSON corruption cleaned - 'group' field removed from root level")
+        
+        return cleaned_data
+
+    @staticmethod
     def save_json(data: Dict[str, Any], output_path: Path) -> bool:
         """Save JSON data to file"""
         try:
+            # Clean any corruption before saving
+            clean_data = JSONUpdater.clean_corrupted_json(data)
             # Create backup of existing file if it exists
             if output_path.exists():
                 import time
@@ -152,7 +171,7 @@ class JSONUpdater:
             
             # Save JSON
             with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+                json.dump(clean_data, f, indent=2, ensure_ascii=False)
             
             logger.success(f"JSON saved: {output_path}")
             return True

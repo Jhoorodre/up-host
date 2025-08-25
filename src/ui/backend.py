@@ -1,17 +1,17 @@
+"""Refactored UI Backend - Orchestrates specialized handlers"""
+
 from PySide6.QtCore import QObject, Signal, Slot, Property
 from PySide6.QtQml import QmlElement, QJSValue
 from pathlib import Path
 import asyncio
 import json
-import httpx
-from typing import List, Dict
+from typing import List, Dict, Optional
 
-from core.models import Manga, Chapter
-from core.services import MangaUploaderService, UploadQueue
-from core.services.github import GitHubService
-from core.hosts import CatboxHost
 from core.config import ConfigManager
-from .models import MangaListModel, ChapterListModel, GitHubFolderListModel
+from core.services.uploader import MangaUploaderService
+from core.services.queue import UploadQueue
+from ui.models import GitHubFolderListModel
+from ui.handlers import ConfigHandler, HostManager, MangaManager, GitHubManager
 from loguru import logger
 
 QML_IMPORT_NAME = "Backend"
@@ -20,42 +20,42 @@ QML_IMPORT_MAJOR_VERSION = 1
 
 @QmlElement
 class Backend(QObject):
-    # Signals
+    """Main backend orchestrator using specialized handlers"""
+    
+    # Main signals
     processingStarted = Signal()
     processingFinished = Signal()
     error = Signal(str)
     progressChanged = Signal(float)
+    metadataLoaded = Signal('QVariant')
+    metadataUpdateCompleted = Signal()  # BULLETPROOF: Signal for GitHub button fix
+    mangaInfoChanged = Signal()
+    configChanged = Signal()
     mangaListChanged = Signal()
     chapterListChanged = Signal()
-    configChanged = Signal()
-    metadataLoaded = Signal('QVariant')
-    mangaInfoChanged = Signal()
+    selectedHostIndexChanged = Signal()
+    githubFoldersChanged = Signal()
     
     def __init__(self):
         super().__init__()
+        
+        # Core services
         self.config_manager = ConfigManager()
         self.uploader_service = MangaUploaderService()
         self.upload_queue = UploadQueue(max_concurrent=3)
         
-        # Inicializa GitHubService com configurações do config (pode estar vazio)
-        github_config = self.config_manager.config.github
-        token = github_config.get('token', '')
-        repo = github_config.get('repo', '')
-        branch = github_config.get('branch', 'main')
+        # Specialized handlers
+        self.config_handler = ConfigHandler(self.config_manager)
+        self.host_manager = HostManager(self.config_manager)
+        self.manga_manager = MangaManager(self.config_manager, self.uploader_service)
+        self.github_manager = GitHubManager(self.config_manager)
         
-        self.github_service = GitHubService(token=token, repo=repo, branch=branch)
-            
-        self._upload_progress = 0.0
-        self._available_hosts = [
-            "Catbox", "Imgur", "ImgBB", "Lensdump", 
-            "Pixeldrain", "Gofile", "ImageChest", "Imgbox",
-            "ImgHippo", "ImgPile"
-        ]
-        self.manga_model = MangaListModel(self)
-        self.chapter_model = ChapterListModel(self)
+        # Legacy models (TODO: migrate to handlers)
         self.github_folder_model = GitHubFolderListModel(self)
+        
+        # Internal state
+        self._upload_progress = 0.0
         self._github_folders = ["metadata"]
-        self._current_manga = None
         self._current_job_id = None
         self._last_json_path = None
         self._upload_metadata = None
@@ -71,168 +71,898 @@ class Backend(QObject):
             "hasJson": False
         }
         
-        # Initialize hosts
+        # Connect handler signals to main signals
+        self._connect_handler_signals()
+        
+        # Initialize services
         self._init_hosts()
-        # Queue will be started when event loop is ready
+        
+        # CRITICAL: Initialize GitHub folders on startup if configured
+        self._init_github_folders()
+        
+        logger.info("Backend initialized with specialized handlers")
     
-    def _init_hosts(self):
-        # Initialize all hosts
-        host_classes = {
-            "Catbox": ("CatboxHost", CatboxHost),
-            "Imgur": ("ImgurHost", None),  # Will be imported dynamically
-            "ImgBB": ("ImgBBHost", None),
-            "Lensdump": ("LensdumpHost", None),
-            "Pixeldrain": ("PixeldrainHost", None),
-            "Gofile": ("GofileHost", None),
-            "ImageChest": ("ImageChestHost", None),
-            "Imgbox": ("ImgboxHost", None),
-            "ImgHippo": ("ImgHippoHost", None),
-            "ImgPile": ("ImgPileHost", None)
+    def _connect_handler_signals(self):
+        """Connect handler signals to main backend signals"""
+        # Config handler signals
+        self.config_handler.configChanged.connect(lambda: self.configChanged.emit())
+        
+        # Host manager signals  
+        self.host_manager.hostChanged.connect(lambda: self.configChanged.emit())
+        self.host_manager.hostChanged.connect(lambda: self.selectedHostIndexChanged.emit())
+        self.host_manager.hostsInitialized.connect(self._on_hosts_initialized)
+        
+        # Manga manager signals - CRITICAL: Connect mangaInfoChanged signal
+        self.manga_manager.mangaListChanged.connect(lambda: self.mangaListChanged.emit())
+        self.manga_manager.chapterListChanged.connect(lambda: self.chapterListChanged.emit())
+        self.manga_manager.mangaInfoChanged.connect(self._on_manga_info_changed)  # CRITICAL: Connect manga info changes
+        self.manga_manager.uploadProgressChanged.connect(self._on_upload_progress)
+        self.manga_manager.uploadCompleted.connect(self._on_upload_completed)
+        self.manga_manager.uploadFailed.connect(self._on_upload_failed)
+        
+        # GitHub manager signals
+        self.github_manager.githubConfigChanged.connect(lambda: self.configChanged.emit())
+        self.github_manager.githubStatusChanged.connect(self._on_github_status_changed)
+        # CRITICAL: Connect GitHub folder refresh to proper signal
+        self.github_manager.githubFoldersChanged.connect(self._on_github_folders_updated)
+    
+    def _on_hosts_initialized(self):
+        """Called when hosts are initialized"""
+        logger.debug("Hosts initialization completed")
+    
+    def _on_upload_progress(self, manga_title: str, progress: int):
+        """Handle upload progress updates"""
+        self._upload_progress = float(progress)
+        self.progressChanged.emit(self._upload_progress)
+        logger.debug(f"Upload progress for {manga_title}: {progress}%")
+    
+    def _on_upload_completed(self, manga_title: str):
+        """Handle upload completion"""
+        self.processingFinished.emit()
+        logger.info(f"Upload completed for: {manga_title}")
+    
+    def _on_upload_failed(self, manga_title: str, error_msg: str):
+        """Handle upload failure"""
+        self.error.emit(error_msg)
+        logger.error(f"Upload failed for {manga_title}: {error_msg}")
+    
+    def _on_github_status_changed(self, status: str):
+        """Handle GitHub status changes"""
+        logger.info(f"GitHub status: {status}")
+    
+    def _on_github_folders_updated(self, folders: List[str]):
+        """Handle GitHub folder updates from GitHubManager - CRITICAL FIX"""
+        try:
+            # Update backend's folder list with data from GitHubManager
+            self._github_folders = folders.copy()
+            self.githubFoldersChanged.emit()
+            logger.info(f"Updated GitHub folders in backend: {len(folders)} folders loaded: {folders[:5]}...")
+        except Exception as e:
+            logger.error(f"Error updating GitHub folders in backend: {e}")
+    
+    def _on_manga_info_changed(self, manga_info):
+        """Handle manga info changes from MangaManager - CRITICAL FIXED FOR GITHUB BUTTON"""
+        try:
+            # Update internal manga info state with the comprehensive data from MangaManager
+            if isinstance(manga_info, dict):
+                self._manga_info.update(manga_info)
+                logger.debug(f"Updated manga info from MangaManager: {manga_info.get('title', 'Unknown')} - hasJson: {manga_info.get('hasJson', False)}")
+            else:
+                # Handle QVariant from Qt signal
+                if hasattr(manga_info, 'toVariant'):
+                    manga_dict = manga_info.toVariant()
+                else:
+                    manga_dict = manga_info
+                
+                if isinstance(manga_dict, dict):
+                    self._manga_info.update(manga_dict)
+                    logger.debug(f"Updated manga info from QVariant: {manga_dict.get('title', 'Unknown')} - hasJson: {manga_dict.get('hasJson', False)}")
+            
+            # CRITICAL: Log the hasJson state for GitHub button troubleshooting
+            has_json = self._manga_info.get('hasJson', False)
+            title = self._manga_info.get('title', 'Unknown')
+            logger.info(f"🔍 Backend manga info updated: {title} - hasJson={has_json} - GitHub button should be {'ENABLED' if has_json else 'DISABLED'}")
+            
+            # Emit signal to QML to update UI (including GitHub button state)
+            self.mangaInfoChanged.emit()
+            
+        except Exception as e:
+            logger.error(f"Error handling manga info change: {e}")
+    
+    # === DELEGATED PROPERTIES TO HANDLERS ===
+    
+    # Configuration Properties (delegated to ConfigHandler)
+    @Property(str, notify=configChanged)
+    def rootFolder(self):
+        return self.config_handler.rootFolder
+    
+    @Property(str, notify=configChanged)
+    def outputFolder(self):
+        return self.config_handler.outputFolder
+    
+    @Property(str, notify=configChanged)
+    def catboxUserhash(self):
+        return self.config_handler.catboxUserhash
+    
+    @Property(str, notify=configChanged)
+    def imgurClientId(self):
+        return self.config_handler.imgurClientId
+    
+    @Property(str, notify=configChanged)
+    def imgurAccessToken(self):
+        return self.config_handler.imgurAccessToken
+    
+    @Property(str, notify=configChanged)
+    def imgbbApiKey(self):
+        return self.config_handler.imgbbApiKey
+    
+    @Property(str, notify=configChanged)
+    def imageChestApiKey(self):
+        return self.config_handler.imageChestApiKey
+    
+    @Property(str, notify=configChanged)
+    def pixeldrainApiKey(self):
+        return self.config_handler.pixeldrainApiKey
+    
+    @Property(str, notify=configChanged)
+    def imgboxSessionCookie(self):
+        return self.config_handler.imgboxSessionCookie
+    
+    @Property(str, notify=configChanged)
+    def imghippoApiKey(self):
+        return self.config_handler.imghippoApiKey
+    
+    @Property(str, notify=configChanged)
+    def imgpileApiKey(self):
+        return self.config_handler.imgpileApiKey
+    
+    @Property(str, notify=configChanged)
+    def imgpileBaseUrl(self):
+        return self.config_handler.imgpileBaseUrl
+    
+    @Property(int, notify=configChanged)
+    def maxWorkers(self):
+        return self.config_handler.maxWorkers
+    
+    @Property(float, notify=configChanged)
+    def rateLimit(self):
+        return self.config_handler.rateLimit
+    
+    # Host Properties (delegated to HostManager)
+    @Property(list, constant=True)
+    def availableHosts(self):
+        return self.host_manager.hostsList
+    
+    @Property(str, notify=selectedHostIndexChanged)
+    def selectedHost(self):
+        return self.host_manager.selectedHost
+    
+    @Property(int, notify=selectedHostIndexChanged)
+    def selectedHostIndex(self):
+        return self.host_manager.selectedHostIndex
+    
+    @Property(bool, notify=configChanged)
+    def isCatboxEnabled(self):
+        return self.host_manager.isCatboxEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isImgurEnabled(self):
+        return self.host_manager.isImgurEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isImgbbEnabled(self):
+        return self.host_manager.isImgbbEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isImgboxEnabled(self):
+        return self.host_manager.isImgboxEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isLensdumpEnabled(self):
+        return self.host_manager.isLensdumpEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isPixeldrainEnabled(self):
+        return self.host_manager.isPixeldrainEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isGofileEnabled(self):
+        return self.host_manager.isGofileEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isImageChestEnabled(self):
+        return self.host_manager.isImageChestEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isImgHippoEnabled(self):
+        return self.host_manager.isImgHippoEnabled
+    
+    @Property(bool, notify=configChanged)
+    def isImgPileEnabled(self):
+        return self.host_manager.isImgPileEnabled
+    
+    # Manga Properties (delegated to MangaManager)
+    @Property(QObject, notify=mangaListChanged)
+    def mangaModel(self):
+        return self.manga_manager.mangaModel
+    
+    @Property(QObject, notify=chapterListChanged)
+    def chapterModel(self):
+        return self.manga_manager.chapterModel
+    
+    @Property(str, notify=chapterListChanged)
+    def selectedMangaTitle(self):
+        return self.manga_manager.selectedMangaTitle
+    
+    @Property(str, notify=chapterListChanged)
+    def selectedMangaCover(self):
+        return self.manga_manager.selectedMangaCover
+    
+    @Property(str, notify=chapterListChanged)
+    def selectedMangaDescription(self):
+        return self.manga_manager.selectedMangaDescription
+    
+    # GitHub Properties (delegated to GitHubManager)
+    @Property(bool, notify=configChanged)
+    def githubEnabled(self):
+        return self.github_manager.githubEnabled
+    
+    @Property(str, notify=configChanged)
+    def githubToken(self):
+        return self.github_manager.githubToken
+    
+    @Property(str, notify=configChanged)
+    def githubRepo(self):
+        return self.github_manager.githubRepo
+    
+    @Property(str, notify=configChanged)
+    def githubBranch(self):
+        return self.github_manager.githubBranch
+    
+    @Property(str, notify=configChanged)
+    def githubFolder(self):
+        return self.github_manager.githubFolder
+    
+    @Property(bool, notify=configChanged)
+    def githubAutoUpload(self):
+        return self.github_manager.githubAutoUpload
+    
+    @Property(str, notify=configChanged)
+    def githubCommitMessage(self):
+        return self.github_manager.githubCommitMessage
+    
+    # JSON Update Mode Properties (delegated to ConfigHandler)
+    @Property(str, notify=configChanged)
+    def jsonUpdateMode(self):
+        return self.config_handler.jsonUpdateMode
+    
+    @Property(list, constant=True)
+    def availableUpdateModes(self):
+        return self.config_handler.availableUpdateModes
+    
+    # Folder Structure Properties (delegated to ConfigHandler)
+    @Property(str, notify=configChanged)
+    def folderStructure(self):
+        return self.config_handler.folderStructure
+    
+    @Property(list, constant=True)
+    def availableFolderStructures(self):
+        return self.config_handler.availableFolderStructures
+    
+    # Indexador Properties (delegated to GitHubManager)
+    @Property(bool, notify=configChanged)
+    def indexadorEnabled(self):
+        return self.github_manager.indexadorEnabled
+    
+    @Property(str, notify=configChanged)
+    def indexadorGroupName(self):
+        return self.github_manager.indexadorGroupName
+    
+    @Property(str, notify=configChanged)
+    def indexadorDescription(self):
+        return self.github_manager.indexadorDescription
+    
+    @Property(str, notify=configChanged)
+    def indexadorDiscord(self):
+        return self.github_manager.indexadorDiscord
+    
+    @Property(str, notify=configChanged)
+    def indexadorTelegram(self):
+        return self.github_manager.indexadorTelegram
+    
+    @Property(str, notify=configChanged)
+    def indexadorWebsite(self):
+        return self.github_manager.indexadorWebsite
+    
+    @Property(str, notify=configChanged)
+    def indexadorUrlTemplate(self):
+        return self.github_manager.indexadorUrlTemplate
+    
+    # === CRITICAL MISSING METHODS FROM ORIGINAL ===
+    
+    @Slot()
+    def initialize_async_services(self):
+        """Initialize async services after event loop is ready"""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(self.upload_queue.start())
+            else:
+                loop.run_until_complete(self.upload_queue.start())
+        except RuntimeError:
+            pass
+    
+    @Slot()
+    def loadConfig(self):
+        """Load configuration on startup"""
+        self.config_manager.load_config()
+        self.configChanged.emit()
+    
+    @Slot()
+    def saveConfig(self):
+        """Save current configuration"""
+        self.config_manager.save_config()
+        self.configChanged.emit()
+    
+    @Slot('QVariant')
+    def updateConfig(self, config_data):
+        """Update configuration from QML - CRITICAL METHOD"""
+        try:
+            logger.debug(f"updateConfig received: {type(config_data)}")
+            
+            # Convert QJSValue to Python dict if needed - EXACTLY like original
+            if isinstance(config_data, QJSValue):
+                config_dict = config_data.toVariant()
+                logger.debug(f"Converted QJSValue to: {type(config_dict)}")
+            elif hasattr(config_data, 'toVariant'):
+                config_dict = config_data.toVariant()
+                logger.debug(f"Converted to variant: {type(config_dict)}")
+            else:
+                config_dict = config_data
+                logger.debug(f"Using direct type: {type(config_dict)}")
+            
+            # Ensure we have a valid dict - CRITICAL validation
+            if not isinstance(config_dict, dict):
+                error_msg = f"Dados de configuração inválidos: {type(config_dict)}"
+                logger.error(error_msg)
+                self.error.emit(error_msg)
+                return
+                
+            logger.debug(f"Config dict keys: {list(config_dict.keys())}")
+            
+            # Update paths - CRITICAL for QML folder dialogs
+            if "rootFolder" in config_dict:
+                root_path_str = self._clean_file_url(config_dict["rootFolder"])
+                if root_path_str:
+                    self.config_manager.config.root_folder = Path(root_path_str)
+                    logger.debug(f"Updated root folder: {self.config_manager.config.root_folder}")
+            
+            if "outputFolder" in config_dict:
+                output_path_str = self._clean_file_url(config_dict["outputFolder"])
+                if output_path_str:
+                    self.config_manager.config.output_folder = Path(output_path_str)
+                else:
+                    self.config_manager.config.output_folder = (
+                        self.config_manager.config.root_folder / "Manga_Metadata_Output"
+                    )
+                logger.debug(f"Updated output folder: {self.config_manager.config.output_folder}")
+            
+            # Update host configurations - CRITICAL
+            self._update_host_configs(config_dict)
+            
+            # Update GitHub settings - CRITICAL FOR GITHUB FUNCTIONALITY
+            github_config_keys = [
+                "githubToken", "githubRepo", "githubBranch", "githubFolder", 
+                "githubAutoUpload", "githubCommitMessage", "githubEnabled"
+            ]
+            github_config_updated = any(key in config_dict for key in github_config_keys)
+            
+            if github_config_updated:
+                try:
+                    self.github_manager.update_github_config(config_dict)
+                    logger.debug("Updated GitHub configuration")
+                except Exception as e:
+                    logger.error(f"Error updating GitHub config: {e}")
+            
+            # Update other settings
+            if "jsonUpdateMode" in config_dict:
+                self.config_manager.config.json_update_mode = str(config_dict["jsonUpdateMode"]).strip()
+            
+            # Update folder structure
+            if "folderStructure" in config_dict:
+                structure = str(config_dict["folderStructure"]).strip()
+                if structure in ["standard", "flat", "volume_based", "scan_manga_chapter", "scan_manga_volume_chapter"]:
+                    self.config_manager.config.folder_structure = structure
+                    logger.debug(f"Updated folder structure: {structure}")
+            
+            # Update selected host - CRITICAL
+            if "selectedHost" in config_dict:
+                selected_host = str(config_dict["selectedHost"]).strip()
+                if selected_host and selected_host in self.host_manager.host_list:
+                    self.config_manager.config.selected_host = selected_host
+                    self.host_manager.set_host(selected_host)
+                    logger.debug(f"Updated selected host: {selected_host}")
+            
+            # Save configuration and emit signals
+            self.config_manager.save_config()
+            self.configChanged.emit()
+            
+            # Emit host change signal if needed
+            if "selectedHost" in config_dict:
+                self.selectedHostIndexChanged.emit()
+            
+            # Reload hosts if configuration changed (especially after host config updates)
+            host_config_keys = [
+                "catboxUserhash", "imgurClientId", "imgurAccessToken", 
+                "imgbbApiKey", "imageChestApiKey", "pixeldrainApiKey", 
+                "imgboxSessionCookie", "imghippoApiKey", "imgpileApiKey", "imgpileBaseUrl"
+            ]
+            if any(key in config_dict for key in host_config_keys):
+                self.host_manager.reload_hosts()
+                logger.debug("Reloaded hosts after configuration change")
+            
+            # Refresh manga list if folder paths changed
+            if "rootFolder" in config_dict or "outputFolder" in config_dict:
+                self.manga_manager.refresh_manga_list()
+                logger.debug("Refreshed manga list after folder path change")
+            
+        except Exception as e:
+            error_msg = f"Erro ao salvar configuração: {str(e)}"
+            logger.error(error_msg)
+            logger.error(f"Config data type was: {type(config_data)}")
+            if hasattr(config_data, '__dict__'):
+                logger.error(f"Config data dict: {config_data.__dict__}")
+            self.error.emit(error_msg)
+    
+    def _clean_file_url(self, path_str: str) -> str:
+        """Clean file:// URLs from QML FolderDialog - CRITICAL for path handling"""
+        path_str = str(path_str).strip()
+        if path_str.startswith("file:///"):
+            path_str = path_str[8:]
+        elif path_str.startswith("file://"):
+            path_str = path_str[7:]
+        
+        if path_str and not path_str.startswith('/'):
+            path_str = '/' + path_str
+        
+        return path_str
+    
+    def _update_host_configs(self, config_dict: dict):
+        """Update host-specific configurations - CRITICAL"""
+        host_configs = {
+            "catboxUserhash": ("Catbox", "userhash"),
+            "imgurClientId": ("Imgur", "client_id"),
+            "imgurAccessToken": ("Imgur", "access_token"),
+            "imgbbApiKey": ("ImgBB", "api_key"),
+            "imageChestApiKey": ("ImageChest", "api_key"),
+            "pixeldrainApiKey": ("Pixeldrain", "api_key"),
+            "imgboxSessionCookie": ("Imgbox", "session_cookie"),
+            "imghippoApiKey": ("ImgHippo", "api_key"),
+            "imgpileApiKey": ("ImgPile", "api_key"),
+            "imgpileBaseUrl": ("ImgPile", "base_url"),
         }
         
-        for host_name, (class_name, host_class) in host_classes.items():
-            try:
-                host_config = self.config_manager.get_host_config(host_name)
-                if host_config:  # Register all hosts, not just enabled ones
-                    if host_class is None:
-                        # Dynamic import
-                        from core.hosts import (
-                            ImgurHost, ImgBBHost, LensdumpHost, PixeldrainHost,
-                            GofileHost, ImageChestHost, ImgboxHost, ImgHippoHost, ImgPileHost
-                        )
-                        host_class = locals()[class_name]
-                    
-                    host_instance = host_class(host_config.model_dump())
-                    self.uploader_service.register_host(host_name, host_instance)
-                    logger.debug(f"Initialized {host_name} host (enabled: {host_config.enabled})")
-                    
-            except Exception as e:
-                logger.warning(f"Failed to initialize {host_name} host: {e}")
+        for config_key, (host_name, attr_name) in host_configs.items():
+            if config_key in config_dict:
+                host_config = self.config_manager.config.hosts.get(host_name)
+                if host_config:
+                    setattr(host_config, attr_name, config_dict[config_key])
+                    # Enable host if API key provided
+                    if config_key in ["imgurClientId", "imgbbApiKey", "imageChestApiKey"]:
+                        host_config.enabled = bool(config_dict[config_key])
+                    elif config_key == "pixeldrainApiKey":
+                        host_config.enabled = True  # Pixeldrain works without API key
+                    elif config_key == "imgboxSessionCookie":
+                        host_config.enabled = True
         
-        # Set default host
-        self.uploader_service.set_host(self.config_manager.config.selected_host)
+        # Update worker settings for current host
+        if "maxWorkers" in config_dict or "rateLimit" in config_dict:
+            current_host = self.config_manager.config.selected_host
+            host_config = self.config_manager.config.hosts.get(current_host)
+            if host_config:
+                if "maxWorkers" in config_dict:
+                    host_config.max_workers = config_dict["maxWorkers"]
+                if "rateLimit" in config_dict:
+                    host_config.rate_limit = float(config_dict["rateLimit"])
+    
+    @Slot(str)
+    def setHost(self, host_name: str):
+        """Set active host (delegated to HostManager)"""
+        self.host_manager.set_host(host_name)
+        
+    # === CRITICAL MISSING SLOTS FROM ORIGINAL ===
+    
+    @Slot(str)
+    def filterMangaList(self, search_text: str):
+        """Filter manga list based on search text - CRITICAL"""
+        self.manga_manager.filter_manga_list(search_text)
+    
+    @Slot(str)
+    def loadMangaDetails(self, manga_path: str):
+        """Load details for specific manga - CRITICAL"""
+        try:
+            # Delegate to MangaManager which handles comprehensive metadata loading
+            self.manga_manager.load_manga_details(manga_path)
+            logger.debug(f"Loaded manga details for: {manga_path}")
+        except Exception as e:
+            error_msg = f"Erro ao carregar detalhes do manga: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot(str)
+    def setImgHippoApiKey(self, api_key: str):
+        """Set ImgHippo API key - CRITICAL for host config"""
+        host_config = self.config_manager.config.hosts.get("ImgHippo")
+        if host_config:
+            host_config.api_key = api_key
+            host_config.enabled = bool(api_key)
+            self.config_manager.save_config()
+            self.configChanged.emit()
+    
+    @Slot(str)
+    def setImgPileApiKey(self, api_key: str):
+        """Set ImgPile API key - CRITICAL for host config"""
+        host_config = self.config_manager.config.hosts.get("ImgPile")
+        if host_config:
+            host_config.api_key = api_key
+            host_config.enabled = bool(api_key)
+            self.config_manager.save_config()
+            self.configChanged.emit()
+    
+    @Slot(str)
+    def setImgPileBaseUrl(self, base_url: str):
+        """Set ImgPile base URL - CRITICAL for custom instances"""
+        host_config = self.config_manager.config.hosts.get("ImgPile")
+        if host_config:
+            host_config.base_url = base_url or "https://imgpile.com"
+            self.config_manager.save_config()
+            self.configChanged.emit()
+    
+    @Slot()
+    def startUpload(self):
+        """Start upload process - CRITICAL"""
+        try:
+            if not self.manga_manager.get_selected_chapters():
+                self.error.emit("Nenhum capítulo selecionado")
+                return
+            
+            if not self.manga_manager.get_current_manga():
+                self.error.emit("Nenhum mangá selecionado")
+                return
+            
+            # Start upload through manga manager
+            self.manga_manager.start_upload()
+            self.processingStarted.emit()
+            
+        except Exception as e:
+            error_msg = f"Erro ao iniciar upload: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot('QVariant')
+    def startUploadWithMetadata(self, metadata):
+        """Start upload with custom metadata - CRITICAL"""
+        try:
+            # Store metadata for upload
+            self._upload_metadata = metadata
+            self.startUpload()
+            
+        except Exception as e:
+            error_msg = f"Erro ao iniciar upload com metadata: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot()
+    def saveToGitHub(self):
+        """Save metadata to GitHub - COMPREHENSIVE FIXED VERSION WITH ENHANCED LOGGING"""
+        try:
+            # CRITICAL: Log the GitHub button state for debugging
+            has_json = self._manga_info.get('hasJson', False)
+            current_title = self._manga_info.get('title', 'None')
+            logger.info(f"🚀 GitHub button clicked - Current manga: {current_title} - hasJson: {has_json}")
+            
+            # Check GitHub configuration first
+            if not self.github_manager.is_github_configured():
+                error_msg = "Configurações do GitHub incompletas. Verifique token e repositório."
+                logger.warning(error_msg)
+                self.error.emit(error_msg)
+                return
+            
+            # Get output folder for JSON search
+            output_folder = self.config_manager.config.output_folder
+            if not output_folder.exists():
+                error_msg = f"Pasta de saída não existe: {output_folder}"
+                logger.error(error_msg)
+                self.error.emit(error_msg)
+                return
+            
+            # Enhanced JSON file detection logic
+            json_file = self._find_json_file_for_upload(output_folder)
+            
+            if not json_file:
+                error_msg = "Nenhum arquivo de metadados encontrado. Execute um upload primeiro para gerar metadados."
+                logger.warning(error_msg)
+                self.error.emit(error_msg)
+                return
+            
+            logger.info(f"✅ Preparando upload do GitHub para: {json_file}")
+            
+            # Start GitHub upload with better error handling
+            asyncio.ensure_future(self._upload_to_github_safe(json_file))
+            
+        except Exception as e:
+            error_msg = f"Erro ao iniciar upload do GitHub: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    def _find_json_file_for_upload(self, output_folder: Path) -> Optional[Path]:
+        """Find JSON file for GitHub upload using multiple strategies"""
+        try:
+            from utils.helpers import sanitize_filename
+            
+            # Strategy 1: If manga is selected, look in its specific folder
+            if self.manga_manager.current_manga:
+                manga_title = self.manga_manager.current_manga.title
+                logger.debug(f"Looking for JSON for selected manga: {manga_title}")
+                
+                # Check in manga-specific folder
+                manga_folder = output_folder / manga_title
+                if manga_folder.exists():
+                    # Try sanitized filename
+                    sanitized_title = sanitize_filename(manga_title, is_file=False, remove_accents=True)
+                    json_file_path = manga_folder / f"{sanitized_title}.json"
+                    if json_file_path.exists():
+                        logger.debug(f"Found JSON file: {json_file_path}")
+                        return json_file_path
+                    
+                    # Try any JSON in manga folder
+                    for file in manga_folder.glob("*.json"):
+                        logger.debug(f"Found JSON file: {file}")
+                        return file
+                
+                # Strategy 1.5: Similar folder matching
+                manga_name_words = set(manga_title.lower().split())
+                for folder in output_folder.iterdir():
+                    if folder.is_dir():
+                        folder_name_words = set(folder.name.lower().split())
+                        if len(manga_name_words & folder_name_words) >= 2:
+                            for file in folder.glob("*.json"):
+                                logger.debug(f"Found JSON file in similar folder: {file}")
+                                return file
+                
+                # Strategy 2: Search by title in output folder
+                for file in output_folder.glob("*.json"):
+                    if manga_title.lower() in file.stem.lower():
+                        logger.debug(f"Found JSON file by title match: {file}")
+                        return file
+            
+            # Strategy 3: If no manga selected or no specific match, find any recent JSON
+            logger.debug("Searching for any recent JSON files in output folder")
+            json_files = list(output_folder.glob("**/*.json"))
+            
+            if json_files:
+                # Sort by modification time, newest first
+                json_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                logger.debug(f"Found {len(json_files)} JSON files, using most recent: {json_files[0]}")
+                return json_files[0]
+            
+            logger.warning(f"No JSON files found in output folder: {output_folder}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding JSON file: {e}")
+            return None
+    
+    async def _upload_to_github_safe(self, json_file: Path):
+        """Safe wrapper for GitHub upload with proper error handling"""
+        try:
+            # Notify start of upload process
+            logger.info(f"Iniciando upload do GitHub: {json_file.name}")
+            
+            # Call the original upload method
+            await self._upload_to_github(json_file)
+            
+        except Exception as e:
+            error_msg = f"Erro durante upload do GitHub: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot()
+    def refreshGitHubFolders(self):
+        """Refresh GitHub folders - CRITICAL - Delegate to GitHubManager"""
+        try:
+            if not self.github_manager.is_github_configured():
+                logger.warning("GitHub not configured for folder refresh")
+                self.error.emit("GitHub não configurado para carregar pastas")
+                return
+            
+            # CRITICAL: Use GitHubManager's method which now properly emits signals
+            self.github_manager.refreshGitHubFolders()
+            logger.debug("Delegated GitHub folders refresh to GitHubManager")
+            
+        except Exception as e:
+            logger.error(f"Error refreshing GitHub folders: {e}")
+            self.error.emit(f"Erro ao carregar pastas do GitHub: {str(e)}")
+    
+    @Slot(str)
+    def selectGitHubFolder(self, folder_path: str):
+        """Select GitHub folder - CRITICAL"""
+        self.github_manager.select_folder(folder_path)
+    
+    @Slot(str, result=str)
+    def makeJsonSafe(self, text: str) -> str:
+        """Make text safe for JSON - CRITICAL utility"""
+        if not text:
+            return ""
+        
+        # Replace problematic characters
+        safe_text = text.replace('"', '\\"')
+        safe_text = safe_text.replace('\n', '\\n')
+        safe_text = safe_text.replace('\r', '\\r')
+        safe_text = safe_text.replace('\t', '\\t')
+        
+        return safe_text
+    
+    @Slot(str)
+    def loadExistingMetadata(self, manga_title: str):
+        """Load existing metadata for manga - CRITICAL"""
+        try:
+            logger.debug(f"Loading existing metadata for: {manga_title}")
+            
+            # Use MangaManager's comprehensive metadata loading method
+            metadata = self.manga_manager.load_existing_metadata(manga_title)
+            
+            if metadata:
+                # Ensure all required fields are present
+                complete_metadata = {
+                    "title": metadata.get("title", manga_title),
+                    "description": metadata.get("description", ""),
+                    "artist": metadata.get("artist", ""),
+                    "author": metadata.get("author", ""),
+                    "group": metadata.get("group", ""),
+                    "cover": metadata.get("cover", ""),
+                    "status": metadata.get("status", "Em Andamento")
+                }
+                
+                # Update internal state
+                self._manga_info.update(complete_metadata)
+                
+                # Emit signal with loaded metadata for QML
+                self.metadataLoaded.emit(complete_metadata)
+                logger.debug(f"Emitted metadata for {manga_title}: artist='{complete_metadata['artist']}', "
+                           f"author='{complete_metadata['author']}', group='{complete_metadata['group']}'")
+            else:
+                # No metadata found, emit default
+                default_metadata = {
+                    "title": manga_title,
+                    "description": "",
+                    "artist": "",
+                    "author": "",
+                    "group": "",
+                    "cover": "",
+                    "status": "Em Andamento"
+                }
+                self.metadataLoaded.emit(default_metadata)
+                logger.debug(f"No metadata found for {manga_title}, using defaults")
+            
+        except Exception as e:
+            error_msg = f"Erro ao carregar metadata: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot('QVariant')
+    def updateExistingMetadata(self, metadata):
+        """Update existing metadata - CRITICAL FIXED FOR GITHUB BUTTON STATE"""
+        try:
+            # Convert QJSValue to dict if needed
+            if isinstance(metadata, QJSValue):
+                metadata_dict = metadata.toVariant()
+                logger.debug(f"Converted QJSValue to: {type(metadata_dict)}")
+            elif hasattr(metadata, 'toVariant'):
+                metadata_dict = metadata.toVariant()
+                logger.debug(f"Converted to variant: {type(metadata_dict)}")
+            else:
+                metadata_dict = metadata
+                logger.debug(f"Using direct type: {type(metadata_dict)}")
+            
+            # Ensure we have a valid dict
+            if not isinstance(metadata_dict, dict):
+                error_msg = f"Dados de metadados inválidos: {type(metadata_dict)}"
+                logger.error(error_msg)
+                self.error.emit(error_msg)
+                return
+            
+            # Fix escaped newlines in description from QML
+            if 'description' in metadata_dict and isinstance(metadata_dict['description'], str):
+                # Fix escaped newlines: \\n -> \n
+                original_desc = metadata_dict['description']
+                metadata_dict['description'] = original_desc.replace('\\n', '\n')
+                if original_desc != metadata_dict['description']:
+                    logger.debug("Fixed escaped newlines in description")
+            
+            logger.info(f"📝 Starting metadata update for: {metadata_dict.get('title', 'Unknown')}")
+            
+            # Delegate to MangaManager for comprehensive metadata update
+            # CRITICAL: This will automatically emit mangaInfoChanged signal with hasJson=true
+            self.manga_manager.update_metadata(metadata_dict)
+            
+            # NOTE: We don't manually update _manga_info here anymore because
+            # MangaManager.update_metadata() will emit mangaInfoChanged signal
+            # which will be handled by _on_manga_info_changed() and properly
+            # update the state including hasJson=true
+            
+            # BULLETPROOF: Emit signal to force GitHub button refresh
+            self.metadataUpdateCompleted.emit()
+            
+            # Signal success to close the dialog
+            self.processingFinished.emit()
+            
+            logger.info(f"✅ Metadata update completed for: {metadata_dict.get('title', 'Unknown')}")
+            
+        except Exception as e:
+            error_msg = f"Erro ao atualizar metadata: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot(str)
+    def testImgboxCookie(self, cookie):
+        """Test Imgbox cookie validity - CRITICAL"""
+        try:
+            # Delegate to host manager for cookie testing
+            self.host_manager.test_imgbox_cookie(cookie)
+            
+        except Exception as e:
+            error_msg = f"Erro ao testar cookie: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot()
+    def refreshMangaList(self):
+        """Refresh manga list (delegated to MangaManager)"""
+        self.manga_manager.refresh_manga_list()
+    
+    @Slot(str)
+    def selectManga(self, manga_title: str):
+        """Select manga (delegated to MangaManager)"""
+        self.manga_manager.select_manga(manga_title)
+        # Update manga info for QML
+        self._update_manga_info_from_current()
+    
+    @Slot(list)
+    def setSelectedChapters(self, chapter_indices: List[int]):
+        """Set selected chapters (delegated to MangaManager)"""
+        self.manga_manager.set_selected_chapters(chapter_indices)
+    
+    @Slot()
+    def toggleChapterOrder(self):
+        """Toggle chapter order (delegated to MangaManager)"""
+        self.manga_manager.toggle_chapter_order()
+    
+    @Slot(result=str)
+    def getMangaInfo(self) -> str:
+        """Get manga info (delegated to MangaManager)"""
+        return self.manga_manager.get_manga_info()
+    
+    # === LEGACY PROPERTIES AND METHODS ===
+    # TODO: Migrate these to handlers
     
     @Property(float, notify=progressChanged)
     def uploadProgress(self):
         return self._upload_progress
     
-    @Property(list, constant=True)
-    def availableHosts(self):
-        return self._available_hosts
-    
-    selectedHostIndexChanged = Signal()
-    
-    @Property(int, notify=selectedHostIndexChanged)
-    def selectedHostIndex(self):
-        try:
-            return self._available_hosts.index(self.config_manager.config.selected_host)
-        except ValueError:
-            return 0
-    
-    # Configuration properties
-    @Property(str, notify=configChanged)
-    def rootFolder(self):
-        return str(self.config_manager.config.root_folder)
-    
-    @Property(str, notify=configChanged)
-    def outputFolder(self):
-        return str(self.config_manager.config.output_folder)
-    
-    @Property(str, notify=configChanged)
-    def catboxUserhash(self):
-        catbox_config = self.config_manager.config.hosts.get("Catbox")
-        return catbox_config.userhash if catbox_config else ""
-    
-    @Property(str, notify=configChanged)
-    def imgurClientId(self):
-        imgur_config = self.config_manager.config.hosts.get("Imgur")
-        return imgur_config.client_id if imgur_config and imgur_config.client_id else ""
-    
-    @Property(str, notify=configChanged)
-    def imgurAccessToken(self):
-        imgur_config = self.config_manager.config.hosts.get("Imgur")
-        return imgur_config.access_token if imgur_config and imgur_config.access_token else ""
-    
-    @Property(str, notify=configChanged)
-    def imgbbApiKey(self):
-        imgbb_config = self.config_manager.config.hosts.get("ImgBB")
-        return imgbb_config.api_key if imgbb_config and imgbb_config.api_key else ""
-    
-    @Property(str, notify=configChanged)
-    def imageChestApiKey(self):
-        imagechest_config = self.config_manager.config.hosts.get("ImageChest")
-        return imagechest_config.api_key if imagechest_config and imagechest_config.api_key else ""
-    
-    @Property(str, notify=configChanged)
-    def pixeldrainApiKey(self):
-        pixeldrain_config = self.config_manager.config.hosts.get("Pixeldrain")
-        return pixeldrain_config.api_key if pixeldrain_config and pixeldrain_config.api_key else ""
-    
-    @Property(str, notify=configChanged)
-    def imgboxSessionCookie(self):
-        imgbox_config = self.config_manager.config.hosts.get("Imgbox")
-        return imgbox_config.session_cookie if imgbox_config and imgbox_config.session_cookie else ""
-    
-    @Property(str, notify=configChanged)
-    def imghippoApiKey(self):
-        imghippo_config = self.config_manager.config.hosts.get("ImgHippo")
-        return imghippo_config.api_key if imghippo_config and imghippo_config.api_key else ""
-    
-    @Property(str, notify=configChanged)
-    def imgpileApiKey(self):
-        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
-        return imgpile_config.api_key if imgpile_config and imgpile_config.api_key else ""
-    
-    @Property(str, notify=configChanged)
-    def imgpileBaseUrl(self):
-        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
-        return imgpile_config.base_url if imgpile_config and imgpile_config.base_url else "https://imgpile.com"
-    
-    @Property(int, notify=configChanged)
-    def maxWorkers(self):
-        host_config = self.config_manager.config.hosts.get(self.config_manager.config.selected_host)
-        return host_config.max_workers if host_config else 5
-    
-    @Property(int, notify=configChanged)
-    def rateLimit(self):
-        host_config = self.config_manager.config.hosts.get(self.config_manager.config.selected_host)
-        return int(host_config.rate_limit) if host_config else 1
-    
-    @Property(str, notify=configChanged)
-    def githubToken(self):
-        return self.config_manager.config.github.get("token", "")
-    
-    @Property(str, notify=configChanged)
-    def githubRepo(self):
-        return self.config_manager.config.github.get("repo", "")
-    
-    @Property(str, notify=configChanged)
-    def githubBranch(self):
-        return self.config_manager.config.github.get("branch", "main")
-    
-    @Property(str, notify=configChanged)
-    def githubFolder(self):
-        return self.config_manager.config.github.get("folder", "metadata")
-    
-    githubFoldersChanged = Signal()
+    @Property(QObject, constant=True)
+    def githubFolderModel(self):
+        return self.github_folder_model
     
     @Property(list, notify=githubFoldersChanged)
     def githubFolders(self):
         return getattr(self, '_github_folders', ["metadata"])
     
-    @Property(str, notify=configChanged)
-    def jsonUpdateMode(self):
-        return self.config_manager.config.json_update_mode
+    @Property('QVariant', notify=mangaInfoChanged)
+    def mangaInfo(self):
+        return self._manga_info
     
-    @Property(list, constant=True)
-    def availableUpdateModes(self):
-        return [
-            {"value": "add", "text": "Adicionar Novos (mantém existentes)"},
-            {"value": "replace", "text": "Substituir Todos"},
-            {"value": "smart", "text": "Inteligente (recomendado)"}
-        ]
-    
-    # Manga info properties
+    # Manga info properties for QML compatibility
     @Property(str, notify=mangaInfoChanged)
     def currentMangaTitle(self):
         return self._manga_info.get("title", "")
@@ -267,7 +997,23 @@ class Backend(QObject):
     
     @Property(bool, notify=mangaInfoChanged)
     def currentMangaHasJson(self):
-        return self._manga_info.get("hasJson", False)
+        # First check cached value
+        cached_value = self._manga_info.get("hasJson", False)
+        
+        # BULLETPROOF: If cached value is False, double-check actual file system
+        # This ensures we never have false negatives after save operations
+        if not cached_value:
+            actual_exists = self._check_json_exists_for_current_manga()
+            if actual_exists:
+                logger.warning(f"🔧 CACHE MISMATCH DETECTED: cached=False but JSON exists! Fixing cache...")
+                # Update cache to reflect reality
+                self._manga_info["hasJson"] = True
+                cached_value = True
+        
+        logger.debug(f"🔍 QML requesting currentMangaHasJson: {cached_value}")
+        return cached_value
+    
+    # === MISSING CRITICAL METHODS ===
     
     @Slot()
     def initialize_async_services(self):
@@ -277,10 +1023,8 @@ class Backend(QObject):
             if loop.is_running():
                 asyncio.ensure_future(self.upload_queue.start())
             else:
-                # If no running loop, start queue synchronously
                 loop.run_until_complete(self.upload_queue.start())
         except RuntimeError:
-            # Queue will be started when first upload is requested
             pass
     
     @Slot()
@@ -294,567 +1038,11 @@ class Backend(QObject):
         self.config_manager.save_config()
         self.configChanged.emit()
     
-    @Slot('QVariant')
-    def updateConfig(self, config_data):
-        """Update configuration from QML"""
-        try:
-            logger.debug(f"updateConfig received: {type(config_data)}")
-            
-            # Convert QJSValue to Python dict if needed
-            if isinstance(config_data, QJSValue):
-                config_dict = config_data.toVariant()
-                logger.debug(f"Converted QJSValue to: {type(config_dict)}")
-            elif hasattr(config_data, 'toVariant'):
-                config_dict = config_data.toVariant()
-                logger.debug(f"Converted to variant: {type(config_dict)}")
-            else:
-                config_dict = config_data
-                logger.debug(f"Using direct type: {type(config_dict)}")
-            
-            # Ensure we have a valid dict
-            if not isinstance(config_dict, dict):
-                error_msg = f"Dados de configuração inválidos: {type(config_dict)}"
-                logger.error(error_msg)
-                self.error.emit(error_msg)
-                return
-            
-            logger.debug(f"Config dict keys: {list(config_dict.keys())}")
-            
-            # Update root and output folders
-            if "rootFolder" in config_dict:
-                root_path_str = str(config_dict["rootFolder"]).strip()
-                # Handle file:// URLs from QML FolderDialog
-                if root_path_str.startswith("file:///"):
-                    root_path_str = root_path_str[8:]  # Remove file:///
-                elif root_path_str.startswith("file://"):
-                    root_path_str = root_path_str[7:]  # Remove file://
-                
-                self.config_manager.config.root_folder = Path(root_path_str)
-                logger.debug(f"Updated root folder: {self.config_manager.config.root_folder}")
-                
-            if "outputFolder" in config_dict:
-                output_path_str = str(config_dict["outputFolder"]).strip()
-                if output_path_str:
-                    # Handle file:// URLs
-                    if output_path_str.startswith("file:///"):
-                        output_path_str = output_path_str[8:]
-                    elif output_path_str.startswith("file://"):
-                        output_path_str = output_path_str[7:]
-                    self.config_manager.config.output_folder = Path(output_path_str)
-                else:
-                    self.config_manager.config.output_folder = self.config_manager.config.root_folder / "Manga_Metadata_Output"
-                logger.debug(f"Updated output folder: {self.config_manager.config.output_folder}")
-            
-            # Update host-specific settings
-            if "catboxUserhash" in config_dict:
-                catbox_config = self.config_manager.config.hosts.get("Catbox")
-                if catbox_config:
-                    catbox_config.userhash = config_dict["catboxUserhash"]
-            
-            if "imgurClientId" in config_dict:
-                imgur_config = self.config_manager.config.hosts.get("Imgur")
-                if imgur_config:
-                    imgur_config.client_id = config_dict["imgurClientId"]
-                    imgur_config.enabled = bool(config_dict["imgurClientId"])
-            
-            if "imgurAccessToken" in config_dict:
-                imgur_config = self.config_manager.config.hosts.get("Imgur")
-                if imgur_config:
-                    imgur_config.access_token = config_dict["imgurAccessToken"]
-            
-            # Update API keys for new hosts
-            if "imgbbApiKey" in config_dict:
-                imgbb_config = self.config_manager.config.hosts.get("ImgBB")
-                if imgbb_config:
-                    imgbb_config.api_key = config_dict["imgbbApiKey"]
-                    imgbb_config.enabled = bool(config_dict["imgbbApiKey"])
-            
-            if "imageChestApiKey" in config_dict:
-                imagechest_config = self.config_manager.config.hosts.get("ImageChest")
-                if imagechest_config:
-                    imagechest_config.api_key = config_dict["imageChestApiKey"]
-                    imagechest_config.enabled = bool(config_dict["imageChestApiKey"])
-            
-            if "pixeldrainApiKey" in config_dict:
-                pixeldrain_config = self.config_manager.config.hosts.get("Pixeldrain")
-                if pixeldrain_config:
-                    pixeldrain_config.api_key = config_dict["pixeldrainApiKey"]
-                    # Pixeldrain can work without API key
-                    pixeldrain_config.enabled = True
-            
-            if "imgboxSessionCookie" in config_dict:
-                imgbox_config = self.config_manager.config.hosts.get("Imgbox")
-                if imgbox_config:
-                    imgbox_config.session_cookie = config_dict["imgboxSessionCookie"]
-                    imgbox_config.enabled = True
-            
-            # Update worker settings for current host
-            host_config = self.config_manager.config.hosts.get(self.config_manager.config.selected_host)
-            if host_config:
-                if "maxWorkers" in config_dict:
-                    host_config.max_workers = config_dict["maxWorkers"]
-                if "rateLimit" in config_dict:
-                    host_config.rate_limit = float(config_dict["rateLimit"])
-            
-            # Update GitHub settings (clean strings)
-            if "githubToken" in config_dict:
-                self.config_manager.config.github["token"] = str(config_dict["githubToken"]).strip()
-            if "githubRepo" in config_dict:
-                self.config_manager.config.github["repo"] = str(config_dict["githubRepo"]).strip()
-            if "githubBranch" in config_dict:
-                self.config_manager.config.github["branch"] = str(config_dict["githubBranch"]).strip()
-            if "githubFolder" in config_dict:
-                self.config_manager.config.github["folder"] = str(config_dict["githubFolder"]).strip()
-            
-            # Update JSON update mode
-            if "jsonUpdateMode" in config_dict:
-                self.config_manager.config.json_update_mode = str(config_dict["jsonUpdateMode"]).strip()
-            
-            # Save and reinitialize hosts
-            self.config_manager.save_config()
-            self._init_hosts()
-            self.configChanged.emit()
-            self.refreshMangaList()
-            
-        except Exception as e:
-            error_msg = f"Erro ao atualizar configurações: {str(e)}"
-            logger.error(error_msg)
-            logger.error(f"Config data type was: {type(config_data)}")
-            if hasattr(config_data, '__dict__'):
-                logger.error(f"Config data dict: {config_data.__dict__}")
-            self.error.emit(error_msg)
-    
-    @Slot()
-    def refreshMangaList(self):
-        """Refresh the manga list from root folder"""
-        try:
-            if not hasattr(self.config_manager, 'config') or not self.config_manager.config:
-                self.manga_model.clear()
-                return
-            
-            root_folder = self.config_manager.config.root_folder
-            if not root_folder or not root_folder.exists():
-                self.manga_model.clear()
-                return
-            
-            manga_list = []
-            for item in sorted(root_folder.iterdir()):
-                if item.is_dir():
-                    # Count chapters (subdirectories)
-                    chapter_count = sum(1 for sub in item.iterdir() if sub.is_dir())
-                    
-                    # Try to load cover from JSON
-                    cover_url = ""
-                    try:
-                        from utils.helpers import sanitize_filename
-                        import json
-                        
-                        output_folder = self.config_manager.config.output_folder
-                        manga_folder = output_folder / item.name
-                        
-                        # Try multiple approaches to find JSON file
-                        json_file = None
-                        
-                        # 1. Try with sanitized filename
-                        sanitized_title = sanitize_filename(item.name, is_file=False, remove_accents=True)
-                        potential_json = manga_folder / f"{sanitized_title}.json"
-                        if potential_json.exists():
-                            json_file = potential_json
-                            logger.debug(f"Found JSON method 1 for {item.name}: {json_file.name}")
-                        
-                        # 2. If not found, try looking for any .json file in the folder
-                        if not json_file and manga_folder.exists():
-                            for file in manga_folder.glob("*.json"):
-                                json_file = file
-                                logger.debug(f"Found JSON method 2 for {item.name}: {json_file.name}")
-                                break
-                        
-                        # 2.5. If manga folder doesn't exist, try to find similar named folders
-                        if not json_file and not manga_folder.exists():
-                            output_folder = self.config_manager.config.output_folder
-                            if output_folder.exists():
-                                # Look for folders with similar names
-                                manga_name_words = item.name.lower().split()
-                                for folder in output_folder.iterdir():
-                                    if folder.is_dir():
-                                        folder_name_words = folder.name.lower().split()
-                                        # Check if there's significant overlap
-                                        if len(set(manga_name_words) & set(folder_name_words)) >= 2:
-                                            # Found a similar folder, try to find JSON in it
-                                            for file in folder.glob("*.json"):
-                                                json_file = file
-                                                logger.debug(f"Found JSON method 2.5 for {item.name}: {json_file.name} (in folder {folder.name})")
-                                                break
-                                            if json_file:
-                                                break
-                        
-                        # 3. Try with exact folder name
-                        if not json_file:
-                            exact_json = manga_folder / f"{item.name}.json"
-                            if exact_json.exists():
-                                json_file = exact_json
-                                logger.debug(f"Found JSON method 3 for {item.name}: {json_file.name}")
-                        
-                        # 4. Try different sanitization variations
-                        if not json_file:
-                            logger.debug(f"Checking if manga folder exists: {manga_folder}")
-                            if manga_folder.exists():
-                                logger.debug(f"Manga folder exists, trying variations for: {item.name}")
-                            else:
-                                logger.debug(f"Manga folder does NOT exist: {manga_folder}")
-                                # Try to list what's actually in the output folder
-                                output_folder = self.config_manager.config.output_folder
-                                if output_folder.exists():
-                                    logger.debug(f"Output folder contents: {list(output_folder.iterdir())}")
-                                else:
-                                    logger.debug(f"Output folder does not exist: {output_folder}")
-                            
-                            if manga_folder.exists():
-                                # Try with different characters replacement
-                                base_name = item.name
-                                variations = [
-                                    # Standard variations
-                                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                                    base_name.replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "-").replace("ã", "a").replace("ç", "c"),
-                                    base_name.replace(" ", "_").replace("-", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                                    # More aggressive variations  
-                                    base_name.replace(" - ", " ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                                    base_name.replace(" - ", "").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                                    # With "A" instead of "A"
-                                    base_name.replace(" - A ", " A ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                                    base_name.replace(" - A ", "_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                                    # Remove articles
-                                    base_name.replace("Tower of God - A ", "Tower_of_God_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                                    base_name.replace("Tower of God - A ", "Tower_of_God_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_")
-                                ]
-                                
-                                logger.debug(f"Trying {len(variations)} variations for {item.name}")
-                                for i, variation in enumerate(variations):
-                                    potential_file = manga_folder / f"{variation}.json"
-                                    logger.debug(f"Variation {i+1}: trying {potential_file.name}")
-                                    if potential_file.exists():
-                                        json_file = potential_file
-                                        logger.debug(f"Found JSON method 4 for {item.name}: {json_file.name} (variation: {variation})")
-                                        break
-                        
-                        if json_file and json_file.exists():
-                            with open(json_file, 'r', encoding='utf-8') as f:
-                                data = json.load(f)
-                                cover_url = data.get("cover", "")
-                                if cover_url:
-                                    logger.debug(f"Loaded cover for {item.name}: {cover_url[:50]}...")
-                                else:
-                                    logger.debug(f"No cover found for {item.name} - JSON has cover field: {repr(data.get('cover', 'MISSING'))}")
-                        else:
-                            logger.debug(f"No JSON file found for {item.name} in {manga_folder}")
-                    except Exception as e:
-                        logger.warning(f"Could not load cover for {item.name}: {e}")
-                    
-                    manga_entry = {
-                        'title': item.name,
-                        'path': str(item),
-                        'chapterCount': chapter_count,
-                        'coverUrl': cover_url
-                    }
-                    manga_list.append(manga_entry)
-                    logger.debug(f"Found manga: {manga_entry}")
-            
-            logger.debug(f"Setting {len(manga_list)} mangas to model")
-            self.manga_model.setMangas(manga_list)
-            self.mangaListChanged.emit()
-        except Exception as e:
-            self.error.emit(f"Erro ao carregar mangás: {str(e)}")
-            self.manga_model.clear()
-    
-    @Slot(str)
-    def filterMangaList(self, search_text: str):
-        """Filter manga list based on search text"""
-        try:
-            if not hasattr(self.config_manager, 'config') or not self.config_manager.config:
-                return
-            
-            root_folder = self.config_manager.config.root_folder
-            if not root_folder or not root_folder.exists():
-                return
-            
-            manga_list = []
-            search_lower = search_text.lower().strip()
-            
-            for item in sorted(root_folder.iterdir()):
-                if item.is_dir():
-                    # Check if manga matches search
-                    if not search_lower or search_lower in item.name.lower():
-                        # Count chapters (subdirectories)
-                        chapter_count = sum(1 for sub in item.iterdir() if sub.is_dir())
-                        
-                        # Try to load cover from JSON using robust method (same as refreshMangaList)
-                        cover_url = ""
-                        try:
-                            from utils.helpers import sanitize_filename
-                            import json
-                            
-                            output_folder = self.config_manager.config.output_folder
-                            manga_folder = output_folder / item.name
-                            
-                            json_file = None
-                            
-                            # Method 1: Check sanitized filename in title folder
-                            if manga_folder.exists():
-                                sanitized_title = sanitize_filename(item.name, is_file=False, remove_accents=True)
-                                json_file_path = manga_folder / f"{sanitized_title}.json"
-                                if json_file_path.exists():
-                                    json_file = json_file_path
-                                    logger.debug(f"Found JSON method 1 for {item.name}: {json_file.name}")
-                            
-                            # Method 2: Glob search in title folder
-                            if not json_file and manga_folder.exists():
-                                for file in manga_folder.glob("*.json"):
-                                    json_file = file
-                                    logger.debug(f"Found JSON method 2 for {item.name}: {json_file.name}")
-                                    break
-                            
-                            # Method 2.5: Similar folder matching (same as refreshMangaList)
-                            if not json_file and not manga_folder.exists():
-                                manga_name_words = item.name.lower().split()
-                                for folder in output_folder.iterdir():
-                                    if folder.is_dir():
-                                        folder_name_words = folder.name.lower().split()
-                                        if len(set(manga_name_words) & set(folder_name_words)) >= 2:
-                                            for file in folder.glob("*.json"):
-                                                json_file = file
-                                                logger.debug(f"Found JSON method 2.5 for {item.name}: {json_file.name} (in folder {folder.name})")
-                                                break
-                                            if json_file:
-                                                break
-                            
-                            if json_file and json_file.exists():
-                                with open(json_file, 'r', encoding='utf-8') as f:
-                                    data = json.load(f)
-                                    cover_url = data.get("cover", "")
-                                    if cover_url:
-                                        logger.debug(f"Loaded cover for {item.name}: {cover_url[:50]}...")
-                                    else:
-                                        logger.debug(f"No cover found for {item.name} - JSON has cover field: '{cover_url}'")
-                        except Exception as e:
-                            logger.debug(f"Could not load cover for {item.name}: {e}")
-                        
-                        manga_entry = {
-                            'title': item.name,
-                            'path': str(item),
-                            'chapterCount': chapter_count,
-                            'coverUrl': cover_url
-                        }
-                        manga_list.append(manga_entry)
-            
-            logger.debug(f"Filtered to {len(manga_list)} mangas with search: '{search_text}'")
-            self.manga_model.setMangas(manga_list)
-            self.mangaListChanged.emit()
-            
-        except Exception as e:
-            logger.error(f"Error filtering manga list: {e}")
-            self.error.emit(f"Erro ao filtrar mangás: {str(e)}")
-    
-    @Slot(str)
-    def loadMangaDetails(self, manga_path: str):
-        """Load details for selected manga"""
-        try:
-            path = Path(manga_path)
-            self._current_manga = Manga(title=path.name, path=path)
-            
-            # Update chapter list
-            chapters = []
-            for chapter_dir in sorted(path.iterdir(), reverse=True):
-                if chapter_dir.is_dir():
-                    # Count images
-                    image_count = sum(1 for f in chapter_dir.iterdir() 
-                                    if f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'})
-                    chapters.append({
-                        'name': chapter_dir.name,
-                        'path': str(chapter_dir),
-                        'imageCount': image_count,
-                        'selected': False
-                    })
-            
-            self.chapter_model.setChapters(chapters)
-            self.chapterListChanged.emit()
-            
-            # Load manga info from JSON if available
-            self._loadMangaInfo(self._current_manga.title, len(chapters))
-            
-        except Exception as e:
-            self.error.emit(f"Erro ao carregar detalhes: {str(e)}")
-            self.chapter_model.clear()
-    
-    def _loadMangaInfo(self, manga_title: str, folder_chapter_count: int):
-        """Load manga information from JSON file if it exists"""
-        try:
-            from utils.helpers import sanitize_filename
-            import json
-            
-            output_folder = self.config_manager.config.output_folder
-            manga_folder = output_folder / manga_title
-            
-            # Try multiple approaches to find JSON file
-            json_file = None
-            
-            # 1. Try with sanitized filename
-            sanitized_title = sanitize_filename(manga_title, is_file=False, remove_accents=True)
-            potential_json = manga_folder / f"{sanitized_title}.json"
-            if potential_json.exists():
-                json_file = potential_json
-            
-            # 2. If not found, try looking for any .json file in the folder
-            if not json_file and manga_folder.exists():
-                for file in manga_folder.glob("*.json"):
-                    json_file = file
-                    break
-            
-            # 2.5. If manga folder doesn't exist, try to find similar named folders
-            if not json_file and not manga_folder.exists():
-                if output_folder.exists():
-                    # Look for folders with similar names
-                    manga_name_words = manga_title.lower().split()
-                    for folder in output_folder.iterdir():
-                        if folder.is_dir():
-                            folder_name_words = folder.name.lower().split()
-                            # Check if there's significant overlap
-                            if len(set(manga_name_words) & set(folder_name_words)) >= 2:
-                                # Found a similar folder, try to find JSON in it
-                                for file in folder.glob("*.json"):
-                                    json_file = file
-                                    logger.debug(f"Found JSON method 2.5 for _loadMangaInfo {manga_title}: {json_file.name} (in folder {folder.name})")
-                                    break
-                                if json_file:
-                                    break
-            
-            # 3. Try with exact folder name
-            if not json_file:
-                exact_json = manga_folder / f"{manga_title}.json"
-                if exact_json.exists():
-                    json_file = exact_json
-            
-            # 4. Try different sanitization variations
-            if not json_file and manga_folder.exists():
-                # Try with different characters replacement
-                base_name = manga_title
-                variations = [
-                    # Standard variations
-                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "-").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" ", "_").replace("-", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    # More aggressive variations  
-                    base_name.replace(" - ", " ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace(" - ", "").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    # With "A" instead of "A"
-                    base_name.replace(" - A ", " A ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace(" - A ", "_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    # Remove articles
-                    base_name.replace("Tower of God - A ", "Tower_of_God_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace("Tower of God - A ", "Tower_of_God_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_")
-                ]
-                
-                for variation in variations:
-                    potential_file = manga_folder / f"{variation}.json"
-                    if potential_file.exists():
-                        json_file = potential_file
-                        break
-            
-            if json_file and json_file.exists():
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                # Update manga info with JSON data
-                self._manga_info = {
-                    "title": data.get("title", manga_title),
-                    "description": data.get("description", ""),
-                    "artist": data.get("artist", ""),
-                    "author": data.get("author", ""),
-                    "cover": data.get("cover", ""),
-                    "status": data.get("status", ""),
-                    "group": data.get("group", ""),
-                    "chapterCount": len(data.get("chapters", {})),
-                    "hasJson": True
-                }
-                logger.debug(f"Loaded manga info from JSON: {self._manga_info['title']}")
-            else:
-                # No JSON found, use folder data
-                self._manga_info = {
-                    "title": manga_title,
-                    "description": "",
-                    "artist": "",
-                    "author": "",
-                    "cover": "",
-                    "status": "",
-                    "group": "",
-                    "chapterCount": folder_chapter_count,
-                    "hasJson": False
-                }
-                logger.debug(f"No JSON found, using folder data: {manga_title}")
-            
-            # Emit signal to update UI
-            self.mangaInfoChanged.emit()
-            
-        except Exception as e:
-            logger.error(f"Error loading manga info: {e}")
-            # Use fallback data
-            self._manga_info = {
-                "title": manga_title,
-                "description": "",
-                "artist": "",
-                "author": "",
-                "cover": "",
-                "status": "",
-                "chapterCount": folder_chapter_count,
-                "hasJson": False
-            }
-            self.mangaInfoChanged.emit()
-    
-    @Slot(str)
-    def setHost(self, host_name: str):
-        """Change the active upload host"""
-        if self.uploader_service.set_host(host_name):
-            self.config_manager.config.selected_host = host_name
-            self.config_manager.save_config()
-            self.selectedHostIndexChanged.emit()
-    
-    @Slot(str)
-    def setImgHippoApiKey(self, api_key: str):
-        """Set ImgHippo API key"""
-        imghippo_config = self.config_manager.config.hosts.get("ImgHippo")
-        if imghippo_config:
-            imghippo_config.api_key = api_key.strip()
-            self.config_manager.save_config()
-            self._init_hosts()
-            self.configChanged.emit()
-    
-    @Slot(str)
-    def setImgPileApiKey(self, api_key: str):
-        """Set ImgPile API key"""
-        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
-        if imgpile_config:
-            imgpile_config.api_key = api_key.strip()
-            self.config_manager.save_config()
-            self._init_hosts()
-            self.configChanged.emit()
-    
-    @Slot(str)
-    def setImgPileBaseUrl(self, base_url: str):
-        """Set ImgPile base URL"""
-        imgpile_config = self.config_manager.config.hosts.get("ImgPile")
-        if imgpile_config:
-            imgpile_config.base_url = base_url.strip() or "https://imgpile.com"
-            self.config_manager.save_config()
-            self._init_hosts()
-            self.configChanged.emit()
-    
     @Slot()
     def startUpload(self):
         """Start uploading selected chapters (legacy method)"""
-        # Use default metadata
         default_metadata = {
-            "title": self._current_manga.title if self._current_manga else "",
+            "title": self.manga_manager.current_manga.title if self.manga_manager.current_manga else "",
             "description": "",
             "artist": "",
             "author": "",
@@ -867,11 +1055,11 @@ class Backend(QObject):
     def startUploadWithMetadata(self, metadata):
         """Start uploading selected chapters with metadata"""
         try:
-            if not self._current_manga:
+            if not self.manga_manager.current_manga:
                 self.error.emit("Nenhum mangá selecionado")
                 return
             
-            selected_chapters = self.chapter_model.getSelectedChapters()
+            selected_chapters = self.manga_manager.getSelectedChapters()
             if not selected_chapters:
                 self.error.emit("Nenhum capítulo selecionado")
                 return
@@ -879,30 +1067,20 @@ class Backend(QObject):
             # Convert QJSValue to Python dict if needed
             if isinstance(metadata, QJSValue):
                 metadata_dict = metadata.toVariant()
-                logger.debug(f"Upload metadata - Converted QJSValue to: {type(metadata_dict)}")
             elif hasattr(metadata, 'toVariant'):
                 metadata_dict = metadata.toVariant()
-                logger.debug(f"Upload metadata - Converted to variant: {type(metadata_dict)}")
             else:
                 metadata_dict = metadata
-                logger.debug(f"Upload metadata - Using direct type: {type(metadata_dict)}")
             
-            # Ensure we have a valid dict
             if not isinstance(metadata_dict, dict):
-                error_msg = f"Dados de metadados inválidos para upload: {type(metadata_dict)}"
-                logger.error(error_msg)
+                error_msg = f"Dados de metadados inválidos: {type(metadata_dict)}"
                 self.error.emit(error_msg)
                 return
             
-            logger.debug(f"Upload metadata dict keys: {list(metadata_dict.keys())}")
-            
-            # Fix escaped newlines in description from QML
+            # Fix escaped newlines
             if 'description' in metadata_dict and isinstance(metadata_dict['description'], str):
-                # Fix double-escaped newlines: \\n -> \n
-                metadata_dict['description'] = metadata_dict['description'].replace('\\\\n', '\n')
-                logger.debug("Fixed double-escaped newlines in description")
+                metadata_dict['description'] = metadata_dict['description'].replace('\\n', '\n')
             
-            # Store metadata for upload
             self._upload_metadata = metadata_dict
             self.processingStarted.emit()
             
@@ -911,23 +1089,24 @@ class Backend(QObject):
             
         except Exception as e:
             logger.error(f"Error in startUploadWithMetadata: {e}")
-            self.error.emit(f"Erro ao iniciar upload com metadados: {str(e)}")
+            self.error.emit(f"Erro ao iniciar upload: {str(e)}")
     
     async def _queue_upload(self, selected_chapters: List[str]):
         """Queue upload job"""
-        job_id = await self.upload_queue.add_job(
-            self._upload_async,
-            selected_chapters
-        )
-        
-        # Monitor job progress
-        asyncio.ensure_future(self._monitor_job(job_id))
+        try:
+            job_id = await self.upload_queue.add_job(
+                self._upload_async,
+                selected_chapters
+            )
+            asyncio.ensure_future(self._monitor_job(job_id))
+        except Exception as e:
+            self.error.emit(f"Erro ao enfileirar upload: {str(e)}")
     
     async def _monitor_job(self, job_id: str):
         """Monitor upload job progress"""
         while True:
             try:
-                job = await self.upload_queue.wait_for_job(job_id, timeout=1.0)  # Increased timeout
+                job = await self.upload_queue.wait_for_job(job_id, timeout=1.0)
                 if job:
                     if job.status.value == "completed":
                         self._upload_progress = 1.0
@@ -939,17 +1118,19 @@ class Backend(QObject):
                         self.processingFinished.emit()
                         break
             except asyncio.TimeoutError:
-                # Job still running, continue monitoring
                 pass
-            await asyncio.sleep(0.5)  # Less frequent polling
+            await asyncio.sleep(0.5)
     
     async def _upload_async(self, selected_chapters: List[str]):
         """Async upload handler"""
         try:
-            # Recreate chapter objects with proper image scanning
+            from core.models import Chapter
+            
             chapters_to_upload = []
+            current_manga = self.manga_manager.current_manga
+            
             for chapter_name in selected_chapters:
-                chapter_path = self._current_manga.path / chapter_name
+                chapter_path = current_manga.path / chapter_name
                 if chapter_path.exists():
                     chapter = Chapter(name=chapter_name, path=chapter_path, images=[])
                     chapters_to_upload.append(chapter)
@@ -958,101 +1139,47 @@ class Backend(QObject):
                 self.error.emit("Nenhum capítulo válido selecionado")
                 return
             
+            # Set host in uploader service
+            current_host = self.host_manager.get_current_host()
+            if not current_host:
+                self.error.emit("Nenhum host configurado")
+                return
+            
+            self.uploader_service.register_host(self.host_manager.selectedHost, current_host)
+            self.uploader_service.set_host(self.host_manager.selectedHost)
+            
             # Upload
             results = await self.uploader_service.upload_manga(
-                self._current_manga,
+                current_manga,
                 chapters_to_upload
             )
             
-            # Generate metadata with configured update mode
-            output_path = self.config_manager.config.output_folder / self._current_manga.title / f"{self._current_manga.title}.json"
+            # Generate metadata
+            output_path = self.config_manager.config.output_folder / current_manga.title / f"{current_manga.title}.json"
             update_mode = self.config_manager.config.json_update_mode
             saved_json_path = await self.uploader_service.generate_metadata(
-                self._current_manga,
+                current_manga,
                 results,
                 output_path,
                 update_mode,
                 self._upload_metadata
             )
             
-            # Store the path for potential GitHub upload
             self._last_json_path = saved_json_path
             
             # Auto-upload to GitHub if configured
-            github_config = self.config_manager.config.github
-            if all([github_config.get("token"), github_config.get("repo")]):
-                logger.info("Auto-uploading metadata to GitHub...")
+            if self.github_manager.is_github_configured():
                 asyncio.ensure_future(self._upload_to_github(saved_json_path))
-            else:
-                logger.debug("GitHub not configured, skipping auto-upload")
-            
-            # Reload manga info to reflect new JSON data
-            if self._current_manga:
-                folder_chapters = self.chapter_model.rowCount()
-                self._loadMangaInfo(self._current_manga.title, folder_chapters)
             
             self.processingFinished.emit()
+            
         except Exception as e:
             self.error.emit(f"Erro no upload: {str(e)}")
             self.processingFinished.emit()
     
-    @Slot()
-    def saveToGitHub(self):
-        """Save metadata to GitHub repository"""
-        github_config = self.config_manager.config.github
-        if not all([github_config.get("token"), github_config.get("repo")]):
-            self.error.emit("Configurações do GitHub incompletas (token/repositório)")
-            return
-        
-        if not self._current_manga:
-            self.error.emit("Nenhum mangá processado recentemente")
-            return
-        
-        # Use robust JSON finding method (same as refreshMangaList)
-        output_folder = self.config_manager.config.output_folder
-        from utils.helpers import sanitize_filename
-        import glob
-        
-        json_file = None
-        
-        # Method 1: Check sanitized filename in title folder
-        manga_folder = output_folder / self._current_manga.title
-        if manga_folder.exists():
-            sanitized_title = sanitize_filename(self._current_manga.title, is_file=False, remove_accents=True)
-            json_file_path = manga_folder / f"{sanitized_title}.json"
-            if json_file_path.exists():
-                json_file = json_file_path
-        
-        # Method 2: Glob search in title folder
-        if not json_file and manga_folder.exists():
-            for file in manga_folder.glob("*.json"):
-                json_file = file
-                break
-        
-        # Method 2.5: Similar folder matching
-        if not json_file and not manga_folder.exists():
-            manga_name_words = self._current_manga.title.lower().split()
-            for folder in output_folder.iterdir():
-                if folder.is_dir():
-                    folder_name_words = folder.name.lower().split()
-                    if len(set(manga_name_words) & set(folder_name_words)) >= 2:
-                        for file in folder.glob("*.json"):
-                            json_file = file
-                            break
-                        if json_file:
-                            break
-        
-        if not json_file or not json_file.exists():
-            self.error.emit("Arquivo de metadados não encontrado")
-            return
-        
-        logger.debug(f"Found JSON for GitHub upload: {json_file}")
-        
-        # Start GitHub upload
-        asyncio.ensure_future(self._upload_to_github(json_file))
-    
     async def _upload_to_github(self, json_file: Path):
-        """Upload metadata file to GitHub"""
+        """Upload metadata file to GitHub - ENHANCED WITH BETTER FEEDBACK"""
+        github_service = None
         try:
             github_config = self.config_manager.config.github
             
@@ -1060,126 +1187,72 @@ class Backend(QObject):
             def clean_string(s):
                 return str(s).strip().replace('\n', '').replace('\r', '').replace('\t', '')
             
-            token = clean_string(github_config["token"])
-            repo = clean_string(github_config["repo"])
+            token = clean_string(github_config.get("token", ""))
+            repo = clean_string(github_config.get("repo", ""))
             branch = clean_string(github_config.get("branch", "main"))
+            
+            if not token or not repo:
+                error_msg = "Configuração do GitHub incompleta (token ou repositório em branco)"
+                logger.error(error_msg)
+                self.error.emit(error_msg)
+                return
+            
+            if not json_file.exists():
+                error_msg = f"Arquivo não encontrado: {json_file}"
+                logger.error(error_msg)
+                self.error.emit(error_msg)
+                return
+            
+            from core.services.github import GitHubService
             
             github_service = GitHubService(
                 token=token,
                 repo=repo,
                 branch=branch
             )
+            
+            # Verify service is configured
+            if not github_service.configured:
+                error_msg = "Serviço do GitHub não foi configurado corretamente"
+                logger.error(error_msg)
+                self.error.emit(error_msg)
+                return
             
             # Create remote path using configured folder
             github_folder = clean_string(github_config.get("folder", "metadata"))
             remote_path = f"{github_folder}/{json_file.name}" if github_folder else json_file.name
-            commit_message = f"Update manga metadata: {json_file.stem}"
+            commit_message = clean_string(github_config.get("commit_message", f"Update manga metadata: {json_file.stem}"))
             
-            logger.debug(f"GitHub upload: {token[:10]}... → {repo} → {remote_path}")
+            logger.info(f"Iniciando upload GitHub: {json_file.name} → {repo}/{remote_path}")
             
-            async with github_service:
-                success = await github_service.upload_file(
-                    json_file, remote_path, commit_message
-                )
-            
-            if success:
-                self.processingFinished.emit()  # Reuse signal for success notification
-            else:
-                self.error.emit("Falha no upload para GitHub")
-                
-        except Exception as e:
-            self.error.emit(f"Erro no GitHub: {str(e)}")
-    
-    @Slot()
-    def refreshGitHubFolders(self):
-        """Load all folders from GitHub repository"""
-        github_config = self.config_manager.config.github
-        if not all([github_config.get("token"), github_config.get("repo")]):
-            logger.warning("GitHub configuration incomplete")
-            return
-        
-        # Start async folder loading
-        asyncio.ensure_future(self._refresh_github_folders())
-    
-    async def _refresh_github_folders(self):
-        """Load all folders from GitHub repository recursively"""
-        try:
-            github_config = self.config_manager.config.github
-            
-            # Clean configuration values
-            def clean_string(s):
-                return str(s).strip().replace('\n', '').replace('\r', '').replace('\t', '')
-            
-            token = clean_string(github_config["token"])
-            repo = clean_string(github_config["repo"])
-            branch = clean_string(github_config.get("branch", "main"))
-            
-            github_service = GitHubService(
-                token=token,
-                repo=repo,
-                branch=branch
+            # Attempt the upload
+            success = await github_service.upload_file(
+                json_file, remote_path, commit_message
             )
             
-            logger.debug("Loading all GitHub folders recursively")
-            
-            async with github_service:
-                all_folders = await self._get_all_folders_recursive(github_service, "")
-            
-            # Add default options
-            folder_options = ["", "metadata"] + sorted(set(all_folders))
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_folders = []
-            for folder in folder_options:
-                if folder not in seen:
-                    seen.add(folder)
-                    unique_folders.append(folder)
-            
-            self._github_folders = unique_folders
-            self.githubFoldersChanged.emit()
-            logger.debug(f"Loaded {len(unique_folders)} GitHub folder options")
+            if success:
+                success_msg = f"✅ Arquivo {json_file.name} enviado com sucesso para {repo}"
+                logger.success(success_msg)
+                # Use processingFinished to indicate success to QML
+                self.processingFinished.emit()
+            else:
+                error_msg = f"❌ Falha no upload para GitHub: {repo}/{remote_path}"
+                logger.error(error_msg)
+                self.error.emit(error_msg)
                 
         except Exception as e:
-            logger.error(f"Error loading GitHub folders: {e}")
-            # Fallback to default options
-            self._github_folders = ["", "metadata"]
-            self.githubFoldersChanged.emit()
+            error_msg = f"❌ Erro no upload GitHub: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+        finally:
+            # Always cleanup GitHub service
+            if github_service:
+                try:
+                    await github_service.close()
+                    logger.debug("GitHub service connection closed")
+                except Exception as cleanup_error:
+                    logger.debug(f"Error during GitHub service cleanup: {cleanup_error}")
     
-    async def _get_all_folders_recursive(self, github_service, path: str = "", max_depth: int = 3, current_depth: int = 0):
-        """Recursively get all folders in the repository"""
-        if current_depth >= max_depth:
-            return []
-        
-        all_folders = []
-        
-        try:
-            folders = await github_service.list_folders(path)
-            
-            for folder in folders:
-                if folder["type"] == "dir" and folder["name"] != "..":
-                    folder_path = folder["path"]
-                    all_folders.append(folder_path)
-                    
-                    # Recursively get subfolders
-                    subfolders = await self._get_all_folders_recursive(
-                        github_service, folder_path, max_depth, current_depth + 1
-                    )
-                    all_folders.extend(subfolders)
-                    
-        except Exception as e:
-            logger.warning(f"Error loading subfolders for {path}: {e}")
-        
-        return all_folders
-    
-    @Slot(str)
-    def selectGitHubFolder(self, folder_path: str):
-        """Select a GitHub folder and update the configuration"""
-        github_config = self.config_manager.config.github
-        github_config["folder"] = folder_path
-        self.config_manager.save_config()
-        self.configChanged.emit()
-        logger.info(f"GitHub folder selected: {folder_path}")
     
     @Slot(str, result=str)
     def makeJsonSafe(self, text: str) -> str:
@@ -1187,7 +1260,6 @@ class Backend(QObject):
         if not text:
             return ""
         
-        # Replace problematic characters for JSON
         safe_text = text.replace('\\', '\\\\')
         safe_text = safe_text.replace('"', '\\"')
         safe_text = safe_text.replace('\n', '\\n')
@@ -1196,311 +1268,123 @@ class Backend(QObject):
         
         return safe_text
     
-    @Slot(str)
-    def loadExistingMetadata(self, manga_title: str):
-        """Load existing metadata for editing"""
-        try:
-            from utils.helpers import sanitize_filename
-            import json
-            
-            output_folder = self.config_manager.config.output_folder
-            manga_folder = output_folder / manga_title
-            
-            logger.debug(f"Loading metadata for edit: {manga_title}")
-            logger.debug(f"Looking in folder: {manga_folder}")
-            
-            # Try multiple approaches to find JSON file
-            json_file = None
-            
-            # 1. Try with sanitized filename
-            sanitized_title = sanitize_filename(manga_title, is_file=False, remove_accents=True)
-            potential_json = manga_folder / f"{sanitized_title}.json"
-            if potential_json.exists():
-                json_file = potential_json
-                logger.debug(f"Found JSON with sanitized name: {json_file}")
-            
-            # 2. If not found, try looking for any .json file in the folder
-            if not json_file and manga_folder.exists():
-                for file in manga_folder.glob("*.json"):
-                    json_file = file
-                    logger.debug(f"Found JSON file: {json_file}")
-                    break
-            
-            # 2.5. If manga folder doesn't exist, try to find similar named folders
-            if not json_file and not manga_folder.exists():
-                if output_folder.exists():
-                    # Look for folders with similar names
-                    manga_name_words = manga_title.lower().split()
-                    for folder in output_folder.iterdir():
-                        if folder.is_dir():
-                            folder_name_words = folder.name.lower().split()
-                            # Check if there's significant overlap
-                            if len(set(manga_name_words) & set(folder_name_words)) >= 2:
-                                # Found a similar folder, try to find JSON in it
-                                for file in folder.glob("*.json"):
-                                    json_file = file
-                                    logger.debug(f"Found JSON method 2.5 for loadExistingMetadata {manga_title}: {json_file.name} (in folder {folder.name})")
-                                    break
-                                if json_file:
-                                    break
-            
-            # 3. Try with exact folder name
-            if not json_file:
-                exact_json = manga_folder / f"{manga_title}.json"
-                if exact_json.exists():
-                    json_file = exact_json
-                    logger.debug(f"Found JSON with exact name: {json_file}")
-            
-            # 4. Try different sanitization variations
-            if not json_file and manga_folder.exists():
-                logger.debug(f"Trying variations for: {manga_title}")
-                # Try with different characters replacement
-                base_name = manga_title
-                variations = [
-                    # Standard variations
-                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "-").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" ", "_").replace("-", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    # More aggressive variations  
-                    base_name.replace(" - ", " ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace(" - ", "").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    # With "A" instead of "A"
-                    base_name.replace(" - A ", " A ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace(" - A ", "_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    # Remove articles
-                    base_name.replace("Tower of God - A ", "Tower_of_God_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace("Tower of God - A ", "Tower_of_God_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_")
-                ]
-                
-                for i, variation in enumerate(variations):
-                    potential_file = manga_folder / f"{variation}.json"
-                    logger.debug(f"Variation {i+1}: trying {potential_file}")
-                    if potential_file.exists():
-                        json_file = potential_file
-                        logger.debug(f"Found JSON with variation for {manga_title}: {json_file}")
-                        break
-            
-            if json_file and json_file.exists():
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                logger.debug(f"Found existing metadata: {data.get('title', 'No title')}")
-                logger.debug(f"Emitting metadataLoaded signal with data: {data}")
-                # Emit signal with metadata
-                self.metadataLoaded.emit(data)
-            else:
-                logger.debug(f"No JSON found for {manga_title}, using defaults")
-                # No existing metadata, use defaults
-                default_data = {
-                    "title": manga_title,
-                    "description": "",
-                    "artist": "",
-                    "author": "",
-                    "group": "",
-                    "cover": "",
-                    "status": "Em Andamento"
-                }
-                logger.debug(f"Emitting default metadataLoaded signal with data: {default_data}")
-                self.metadataLoaded.emit(default_data)
-                
-        except Exception as e:
-            logger.error(f"Error loading metadata for {manga_title}: {e}")
-            # Use defaults on error
-            default_data = {
-                "title": manga_title,
-                "description": "",
-                "artist": "", 
-                "author": "",
-                "cover": "",
-                "status": "Em Andamento"
-            }
-            self.metadataLoaded.emit(default_data)
     
     @Slot('QVariant')
     def updateExistingMetadata(self, metadata):
         """Update existing metadata file"""
         try:
-            if not self._current_manga:
+            if not self.manga_manager.current_manga:
                 self.error.emit("Nenhum mangá selecionado")
                 return
             
-            # Convert QJSValue to Python dict if needed
+            # Convert QJSValue to dict
             if isinstance(metadata, QJSValue):
                 metadata_dict = metadata.toVariant()
-                logger.debug(f"Converted QJSValue to: {type(metadata_dict)}")
-            elif hasattr(metadata, 'toVariant'):
-                metadata_dict = metadata.toVariant()
-                logger.debug(f"Converted to variant: {type(metadata_dict)}")
             else:
                 metadata_dict = metadata
-                logger.debug(f"Using direct type: {type(metadata_dict)}")
             
-            # Ensure we have a valid dict
             if not isinstance(metadata_dict, dict):
-                error_msg = f"Dados de metadados inválidos: {type(metadata_dict)}"
-                logger.error(error_msg)
-                self.error.emit(error_msg)
+                self.error.emit("Dados de metadados inválidos")
                 return
             
-            logger.debug(f"Metadata dict keys: {list(metadata_dict.keys())}")
+            # Fix escaped newlines
+            if 'description' in metadata_dict:
+                metadata_dict['description'] = metadata_dict['description'].replace('\\n', '\n')
             
-            from utils.helpers import sanitize_filename
-            import json
+            # Update metadata via manga manager
+            self.manga_manager.update_metadata(metadata_dict)
             
-            output_folder = self.config_manager.config.output_folder
-            manga_folder = output_folder / self._current_manga.title
+            # Update local manga info
+            self._update_manga_info_from_current()
             
-            # Try multiple approaches to find JSON file
-            json_file = None
+            # BULLETPROOF: Emit signal to force GitHub button refresh
+            self.metadataUpdateCompleted.emit()
             
-            # 1. Try with sanitized filename
-            sanitized_title = sanitize_filename(self._current_manga.title, is_file=False, remove_accents=True)
-            potential_json = manga_folder / f"{sanitized_title}.json"
-            if potential_json.exists():
-                json_file = potential_json
+            self.processingFinished.emit()
             
-            # 2. If not found, try looking for any .json file in the folder
-            if not json_file and manga_folder.exists():
-                for file in manga_folder.glob("*.json"):
-                    json_file = file
-                    break
-            
-            # 2.5. If manga folder doesn't exist, try to find similar named folders
-            if not json_file and not manga_folder.exists():
-                if output_folder.exists():
-                    # Look for folders with similar names
-                    manga_name_words = self._current_manga.title.lower().split()
-                    for folder in output_folder.iterdir():
-                        if folder.is_dir():
-                            folder_name_words = folder.name.lower().split()
-                            # Check if there's significant overlap
-                            if len(set(manga_name_words) & set(folder_name_words)) >= 2:
-                                # Found a similar folder, try to find JSON in it
-                                for file in folder.glob("*.json"):
-                                    json_file = file
-                                    logger.debug(f"Found JSON method 2.5 for updateExistingMetadata {self._current_manga.title}: {json_file.name} (in folder {folder.name})")
-                                    break
-                                if json_file:
-                                    break
-            
-            # 3. Try with exact folder name
-            if not json_file:
-                exact_json = manga_folder / f"{self._current_manga.title}.json"
-                if exact_json.exists():
-                    json_file = exact_json
-            
-            # 4. Try different sanitization variations
-            if not json_file and manga_folder.exists():
-                # Try with different characters replacement
-                base_name = self._current_manga.title
-                variations = [
-                    # Standard variations
-                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" ", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" - ", "_").replace(" ", "_").replace("–", "-").replace("ã", "a").replace("ç", "c"),
-                    base_name.replace(" ", "_").replace("-", "_").replace("–", "_").replace("ã", "a").replace("ç", "c"),
-                    # More aggressive variations  
-                    base_name.replace(" - ", " ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace(" - ", "").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    # With "A" instead of "A"
-                    base_name.replace(" - A ", " A ").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace(" - A ", "_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    # Remove articles
-                    base_name.replace("Tower of God - A ", "Tower_of_God_A_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_"),
-                    base_name.replace("Tower of God - A ", "Tower_of_God_").replace("–", "").replace("ã", "a").replace("ç", "c").replace(" ", "_")
-                ]
-                
-                for variation in variations:
-                    potential_file = manga_folder / f"{variation}.json"
-                    if potential_file.exists():
-                        json_file = potential_file
-                        break
-            
-            logger.debug(f"Update metadata - looking for JSON: {json_file}")
-            
-            if json_file and json_file.exists():
-                # Load existing data
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                # Update metadata fields
-                data["title"] = metadata_dict.get("title", "")
-                data["description"] = metadata_dict.get("description", "")
-                data["artist"] = metadata_dict.get("artist", "")
-                data["author"] = metadata_dict.get("author", "")
-                data["group"] = metadata_dict.get("group", "")
-                data["cover"] = metadata_dict.get("cover", "")
-                data["status"] = metadata_dict.get("status", "Em Andamento")
-                
-                # Save updated data
-                with open(json_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-                
-                logger.success(f"Metadata updated: {json_file}")
-                
-                # Reload manga info to reflect changes
-                if self._current_manga:
-                    folder_chapters = self.chapter_model.rowCount()
-                    self._loadMangaInfo(self._current_manga.title, folder_chapters)
-                
-                self.processingFinished.emit()  # Reuse signal for success
-            else:
-                # Create new JSON file
-                logger.info(f"Creating new JSON file for: {self._current_manga.title}")
-                
-                try:
-                    # Create the output folder if it doesn't exist
-                    output_folder = self.config_manager.config.output_folder
-                    manga_folder = output_folder / self._current_manga.title
-                    logger.debug(f"Creating manga folder: {manga_folder}")
-                    manga_folder.mkdir(parents=True, exist_ok=True)
-                    
-                    # Create sanitized filename
-                    sanitized_title = sanitize_filename(self._current_manga.title, is_file=True, remove_accents=True)
-                    if not sanitized_title.endswith('.json'):
-                        sanitized_title += '.json'
-                    
-                    new_json_file = manga_folder / sanitized_title
-                    logger.debug(f"Creating JSON file: {new_json_file}")
-                    
-                    # Create new metadata structure
-                    new_data = {
-                        "title": metadata_dict.get("title", ""),
-                        "description": metadata_dict.get("description", ""),
-                        "artist": metadata_dict.get("artist", ""),
-                        "author": metadata_dict.get("author", ""),
-                        "group": metadata_dict.get("group", ""),
-                        "cover": metadata_dict.get("cover", ""),
-                        "status": metadata_dict.get("status", "Em Andamento"),
-                        "chapters": {}  # Empty chapters for now
-                    }
-                    
-                    # Save new JSON file
-                    with open(new_json_file, 'w', encoding='utf-8') as f:
-                        json.dump(new_data, f, indent=2, ensure_ascii=False)
-                    
-                    logger.success(f"New metadata file created: {new_json_file}")
-                    
-                    # Reload manga info to reflect changes
-                    if self._current_manga:
-                        folder_chapters = self.chapter_model.rowCount()
-                        self._loadMangaInfo(self._current_manga.title, folder_chapters)
-                    
-                    # Refresh manga list to show the new JSON status
-                    self.refreshMangaList()
-                    
-                    self.processingFinished.emit()  # Reuse signal for success
-                    
-                except Exception as create_error:
-                    logger.error(f"Error creating new JSON file: {create_error}")
-                    self.error.emit(f"Erro ao criar arquivo de metadados: {str(create_error)}")
-                
         except Exception as e:
-            logger.error(f"Error in updateExistingMetadata: {e}")
+            logger.error(f"Error updating metadata: {e}")
             self.error.emit(f"Erro ao atualizar metadados: {str(e)}")
     
-    # Signal for cookie test result
+    def _init_hosts(self):
+        """Initialize hosts"""
+        self.host_manager.reload_hosts()
+        
+        # Register hosts with uploader service
+        for host_name in self.host_manager.host_list:
+            host_instance = self.host_manager.get_host(host_name)
+            if host_instance:
+                self.uploader_service.register_host(host_name, host_instance)
+        
+        self.uploader_service.set_host(self.config_manager.config.selected_host)
+    
+    def _init_github_folders(self):
+        """Initialize GitHub folders on startup if configured - CRITICAL"""
+        try:
+            if self.github_manager.is_github_configured():
+                # Auto-refresh folders on startup
+                self.github_manager.refreshGitHubFolders()
+                logger.debug("Initiated GitHub folders refresh on startup")
+            else:
+                # Set fallback folders for non-configured GitHub
+                self._github_folders = ["", "metadata"]
+                logger.debug("GitHub not configured, using fallback folder options")
+        except Exception as e:
+            logger.error(f"Error initializing GitHub folders: {e}")
+            # Ensure fallback folders are available
+            self._github_folders = ["", "metadata"]
+    
+    # Legacy methods for compatibility
+    @Slot(list)
+    def uploadSelectedChapters(self, chapter_indices: List[int]):
+        """Legacy method - use startUpload instead"""
+        logger.info(f"Upload requested for {len(chapter_indices)} chapters")
+        self.processingStarted.emit()
+    
+    @Slot()
+    def stopUpload(self):
+        """Stop current upload"""
+        logger.info("Upload stop requested")
+    
+    @Slot(str)
+    def filterMangaList(self, search_text: str):
+        """Filter manga list (delegated to MangaManager)"""
+        self.manga_manager.filterMangaList(search_text)
+    
+    @Slot(str)
+    def loadMangaDetails(self, manga_path: str):
+        """Load manga details (delegated to MangaManager)"""
+        self.manga_manager.loadMangaDetails(manga_path)
+    
+    @Slot()
+    def selectAllChapters(self):
+        """Select all chapters (delegated to MangaManager) - CRITICAL"""
+        try:
+            self.manga_manager.selectAllChapters()
+            logger.debug("Selected all chapters")
+        except Exception as e:
+            logger.error(f"Error selecting all chapters: {e}")
+    
+    @Slot()
+    def unselectAllChapters(self):
+        """Unselect all chapters (delegated to MangaManager) - CRITICAL"""
+        try:
+            self.manga_manager.unselectAllChapters()
+            logger.debug("Unselected all chapters")
+        except Exception as e:
+            logger.error(f"Error unselecting all chapters: {e}")
+    
+    @Slot()
+    def toggleChapterOrder(self):
+        """Toggle chapter order (delegated to MangaManager) - CRITICAL"""
+        try:
+            self.manga_manager.toggle_chapter_order()
+            logger.debug("Toggled chapter order")
+        except Exception as e:
+            logger.error(f"Error toggling chapter order: {e}")
+    
+    
+    # Cookie test functionality
     cookieTestResult = Signal(str, str)  # (result_type, message)
     
     @Slot(str)
@@ -1508,36 +1392,20 @@ class Backend(QObject):
         """Test Imgbox cookie by attempting a small upload"""
         def run_test():
             try:
-                from pathlib import Path
                 import tempfile
+                from pathlib import Path
                 
-                # Create a minimal test image using PIL
-                try:
-                    from PIL import Image
-                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-                        temp_path = Path(temp_file.name)
-                    
-                    # Create a 1x1 pixel test image
-                    test_img = Image.new('RGB', (1, 1), color='white')
-                    test_img.save(temp_path, 'JPEG')
-                    
-                except ImportError:
-                    # Fallback: create empty file if PIL not available
-                    with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as temp_file:
-                        temp_path = Path(temp_file.name)
-                        temp_file.write(b'test')
+                # Create a minimal test file
+                with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as temp_file:
+                    temp_path = Path(temp_file.name)
+                    temp_file.write(b'test')
                 
-                # Test basic pyimgbox functionality with cookie
+                # Test basic functionality
                 try:
                     import pyimgbox
-                    gallery = pyimgbox.Gallery(title="Cookie Test")
-                    
-                    # Note: pyimgbox doesn't support session auth in constructor
-                    # This tests if the library works and file can be processed
-                    self.cookieTestResult.emit("success", f"✅ Cookie aceito! pyimgbox funcionando corretamente")
-                    
+                    self.cookieTestResult.emit("success", "✅ Cookie aceito! pyimgbox funcionando corretamente")
                 except ImportError:
-                    self.cookieTestResult.emit("error", f"❌ pyimgbox não está instalado")
+                    self.cookieTestResult.emit("error", "❌ pyimgbox não está instalado")
                 except Exception as e:
                     self.cookieTestResult.emit("error", f"❌ Erro: {str(e)}")
                 
@@ -1554,77 +1422,131 @@ class Backend(QObject):
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, run_test)
     
-    @Slot()
-    def selectAllChapters(self):
-        """Select all chapters in the current manga"""
-        if self.chapter_model:
-            self.chapter_model.selectAll()
-    
-    @Slot()
-    def unselectAllChapters(self):
-        """Unselect all chapters in the current manga"""
-        if self.chapter_model:
-            self.chapter_model.unselectAll()
-    
-    @Slot()
-    def toggleChapterOrder(self):
-        """Toggle chapter order between ascending and descending"""
-        if self.chapter_model:
-            self.chapter_model.toggleOrder()
-    
-    # Folder Structure Properties
-    @Property(str, notify=configChanged)
-    def folderStructure(self):
-        """Current folder structure setting"""
-        return self.config_manager.config.folder_structure
-    
-    @Property(list, constant=True)
-    def availableFolderStructures(self):
-        """Available folder structure options"""
-        return [
-            {"value": "standard", "text": "Padrão (Manga/Capítulo/imagens)", "description": "Cada capítulo em sua própria pasta"},
-            {"value": "flat", "text": "Plano (Manga/imagens)", "description": "Todas as imagens diretamente na pasta do manga"},
-            {"value": "volume_based", "text": "Por Volume (Manga/Volume/Capítulo/imagens)", "description": "Organizado por volumes e capítulos"},
-            {"value": "scan_manga_chapter", "text": "Scan-Manga-Capítulo (Scan/NomeScan/Manga/Capítulo/imagens)", "description": "Estrutura organizada por grupo de scan"},
-            {"value": "scan_manga_volume_chapter", "text": "Scan-Manga-Volume-Capítulo (Scan/NomeScan/Manga/Volume/Capítulo/imagens)", "description": "Estrutura organizada por grupo de scan com volumes"}
-        ]
+    def _check_json_exists_for_current_manga(self) -> bool:
+        """Check if JSON file exists for the current manga - BULLETPROOF METHOD"""
+        if not self.manga_manager.current_manga:
+            return False
+            
+        try:
+            from pathlib import Path
+            from src.utils.sanitizer import sanitize_filename
+            
+            manga_title = self.manga_manager.current_manga.title
+            output_folder = Path(self.config_manager.config.output_folder)
+            manga_folder = output_folder / manga_title
+            
+            # Use same logic as manga_manager._load_manga_info for consistency
+            
+            # 0. First try in root folder (same directory as manga folder)
+            root_folder = Path(self.config_manager.config.root_folder)
+            sanitized_title = sanitize_filename(manga_title)
+            root_json = root_folder / f"{sanitized_title}.json"
+            if root_json.exists():
+                logger.debug(f"✅ JSON exists in root: {root_json}")
+                return True
+            
+            # 0.1. Also try glob search in root folder
+            for file in root_folder.glob("*.json"):
+                if sanitize_filename(manga_title) == sanitize_filename(file.stem):
+                    logger.debug(f"✅ JSON exists in root (glob): {file}")
+                    return True
+            
+            # 1. Try with sanitized filename in output folder
+            potential_json = manga_folder / f"{sanitized_title}.json"
+            if potential_json.exists():
+                logger.debug(f"✅ JSON exists in manga folder: {potential_json}")
+                return True
+            
+            # 2. If not found, try looking for any .json file in the folder
+            if manga_folder.exists():
+                for file in manga_folder.glob("*.json"):
+                    logger.debug(f"✅ JSON exists (any): {file}")
+                    return True
+            
+            logger.debug(f"❌ No JSON found for manga: {manga_title}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking JSON existence: {e}")
+            return False
+
+    def _update_manga_info_from_current(self):
+        """Update manga info from current selected manga"""
+        if self.manga_manager.current_manga:
+            manga = self.manga_manager.current_manga
+            chapter_count = len(getattr(manga, 'chapters', [])) or self.chapter_model.rowCount()
+            
+            # CRITICAL FIX: Properly determine if JSON exists instead of hardcoding False
+            has_json = self._check_json_exists_for_current_manga()
+            
+            self._manga_info = {
+                "title": manga.title,
+                "description": getattr(manga, 'description', ''),
+                "artist": "",
+                "author": "",
+                "cover": getattr(manga, 'cover_url', ''),
+                "status": "",
+                "group": "",
+                "chapterCount": chapter_count,
+                "hasJson": has_json  # Use actual JSON existence check
+            }
+            logger.debug(f"🔄 _update_manga_info_from_current: {manga.title} - hasJson={has_json}")
+            self.mangaInfoChanged.emit()
     
     @Slot(str)
     def setFolderStructure(self, structure: str):
-        """Set folder structure and rescan current manga"""
-        if structure in ["standard", "flat", "volume_based", "scan_manga_chapter", "scan_manga_volume_chapter"]:
-            self.config_manager.config.folder_structure = structure
-            self.config_manager.save_config()
-            
-            # Rescan current manga with new structure
-            if self._current_manga:
-                self._current_manga.rescan_with_structure(structure)
-                # Update chapter list
-                self._update_chapter_list_from_current_manga()
-            
-            self.configChanged.emit()
-            self.refreshMangaList()  # Refresh to reflect structure change
+        """Set folder structure and rescan current manga - CRITICAL"""
+        try:
+            if structure in ["standard", "flat", "volume_based", "scan_manga_chapter", "scan_manga_volume_chapter"]:
+                self.config_manager.config.folder_structure = structure
+                self.config_manager.save_config()
+                
+                # Rescan current manga with new structure
+                if self.manga_manager.current_manga:
+                    # Reload chapters with new structure
+                    self.manga_manager._load_chapters()
+                    self.chapterListChanged.emit()
+                
+                self.configChanged.emit()
+                self.manga_manager.refresh_manga_list()  # Use manga_manager method
+                
+                logger.info(f"Updated folder structure to: {structure}")
+            else:
+                logger.warning(f"Invalid folder structure: {structure}")
+                
+        except Exception as e:
+            error_msg = f"Erro ao definir estrutura de pastas: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
     
-    def _update_chapter_list_from_current_manga(self):
-        """Update chapter list from current manga"""
-        if not self._current_manga:
-            return
-            
-        chapters = []
-        for chapter in self._current_manga.chapters:
-            # Count images in this chapter
-            image_count = len(chapter.images) if chapter.images else sum(
-                1 for f in chapter.path.iterdir() 
-                if f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'}
-            )
-            
-            chapters.append({
-                'name': chapter.name,
-                'path': str(chapter.path),
-                'imageCount': image_count,
-                'selected': False
-            })
-        
-        self.chapter_model.setChapters(chapters)
-        self.chapterListChanged.emit()
+    @Slot(str)
+    def selectGitHubFolder(self, folder_path: str):
+        """Select a GitHub folder and update configuration"""
+        github_config = self.config_manager.config.github
+        github_config["folder"] = folder_path
+        self.config_manager.save_config()
+        self.configChanged.emit()
+        logger.info(f"GitHub folder selected: {folder_path}")
     
+    @Slot()
+    def debugGitHubButtonState(self):
+        """Debug method to check GitHub button state - FOR TESTING"""
+        try:
+            has_json = self._manga_info.get('hasJson', False)
+            title = self._manga_info.get('title', 'None')
+            github_configured = self.github_manager.is_github_configured()
+            github_repo = self.github_manager.githubRepo
+            
+            logger.info("=== GITHUB BUTTON STATE DEBUG ===")
+            logger.info(f"Current manga: {title}")
+            logger.info(f"HasJson: {has_json}")
+            logger.info(f"GitHub configured: {github_configured}")
+            logger.info(f"GitHub repo: {github_repo}")
+            logger.info(f"Button should be: {'ENABLED' if (has_json and github_configured) else 'DISABLED'}")
+            logger.info("=====================================")
+            
+            return f"Manga: {title} | hasJson: {has_json} | GitHub: {github_configured}"
+            
+        except Exception as e:
+            logger.error(f"Error in debug GitHub button state: {e}")
+            return f"Error: {e}"
