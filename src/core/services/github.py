@@ -1,7 +1,7 @@
 import httpx
 import base64
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 from loguru import logger
 
 
@@ -30,7 +30,7 @@ class GitHubService:
         self.configured = bool(self.token and self.repo and '/' in self.repo)
         
         if self.configured:
-            self.client = httpx.AsyncClient(
+            self.client: Optional[httpx.AsyncClient] = httpx.AsyncClient(
                 base_url="https://api.github.com",
                 headers={
                     "Authorization": f"token {self.token}",
@@ -46,6 +46,11 @@ class GitHubService:
         if not self.configured:
             logger.warning("GitHub not configured - cannot upload file")
             return False
+        if not self.client:
+            logger.warning("GitHub client is not initialized")
+            return False
+
+        client = self.client
             
         if not file_path.exists():
             logger.error(f"File not found: {file_path}")
@@ -87,7 +92,7 @@ class GitHubService:
                 data["sha"] = sha
             
             # Upload file
-            response = await self.client.put(
+            response = await client.put(
                 f"/repos/{self.repo}/contents/{remote_path}",
                 json=data
             )
@@ -108,6 +113,11 @@ class GitHubService:
         if not self.configured:
             logger.warning("GitHub not configured - cannot upload content")
             return False
+        if not self.client:
+            logger.warning("GitHub client is not initialized")
+            return False
+
+        client = self.client
         
         # Sanitize inputs
         import re
@@ -135,7 +145,7 @@ class GitHubService:
                 data["sha"] = existing_sha
             
             # Upload to GitHub
-            response = await self.client.put(
+            response = await client.put(
                 f"/repos/{repo}/contents/{file_path}",
                 json=data
             )
@@ -147,7 +157,7 @@ class GitHubService:
                 logger.error(f"Repository '{repo}' not found. Check if repository exists and token has access.")
                 return False
             elif response.status_code == 401:
-                logger.error(f"GitHub authentication failed. Check if token is valid.")
+                logger.error("GitHub authentication failed. Check if token is valid.")
                 return False
             elif response.status_code == 403:
                 logger.error(f"GitHub access forbidden. Check if token has write permissions to '{repo}'.")
@@ -162,6 +172,9 @@ class GitHubService:
     
     async def _get_file_sha_for_repo(self, repo: str, remote_path: str) -> Optional[str]:
         """Get SHA of existing file in specific repo"""
+        if not self.client:
+            return None
+
         # Sanitize inputs
         import re
         repo = re.sub(r'[^\x20-\x7E]', '', str(repo)).strip()
@@ -175,15 +188,19 @@ class GitHubService:
             
             if response.status_code == 200:
                 data = response.json()
-                return data.get("sha")
+                return cast(Optional[str], data.get("sha"))
             else:
                 return None
                 
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Failed to read remote SHA for {repo}/{remote_path}: {exc}")
             return None
     
     async def _get_file_sha(self, remote_path: str) -> Optional[str]:
         """Get SHA of existing file"""
+        if not self.client:
+            return None
+
         try:
             response = await self.client.get(
                 f"/repos/{self.repo}/contents/{remote_path}",
@@ -192,15 +209,18 @@ class GitHubService:
             
             if response.status_code == 200:
                 data = response.json()
-                return data.get("sha")
+                return cast(Optional[str], data.get("sha"))
                 
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Failed to read remote SHA for {self.repo}/{remote_path}: {exc}")
         
         return None
     
     async def create_pull_request(self, title: str, body: str, head_branch: str) -> Optional[str]:
         """Create a pull request"""
+        if not self.client:
+            return None
+
         try:
             response = await self.client.post(
                 f"/repos/{self.repo}/pulls",
@@ -214,7 +234,7 @@ class GitHubService:
             
             if response.status_code == 201:
                 data = response.json()
-                return data.get("html_url")
+                return cast(Optional[str], data.get("html_url"))
                 
         except Exception as e:
             logger.error(f"Error creating PR: {e}")
@@ -226,6 +246,11 @@ class GitHubService:
         if not self.configured:
             logger.warning("GitHub not configured - cannot list files")
             return []
+        if not self.client:
+            logger.warning("GitHub client is not initialized")
+            return []
+
+        client = self.client
         
         # Sanitize inputs
         import re
@@ -237,7 +262,7 @@ class GitHubService:
             if path:
                 url += f"/{path}"
             
-            response = await self.client.get(
+            response = await client.get(
                 url,
                 params={"ref": self.branch}
             )
@@ -264,11 +289,37 @@ class GitHubService:
             logger.error(f"Error listing GitHub files: {e}")
             return []
 
+    async def validate_connection(self) -> tuple[bool, str]:
+        """Validate repository access with current credentials."""
+        if not self.configured:
+            return False, "GitHub not configured"
+        if not self.client:
+            return False, "GitHub client is not initialized"
+
+        try:
+            response = await self.client.get(f"/repos/{self.repo}")
+            if response.status_code == 200:
+                return True, f"GitHub connection successful: {self.repo}"
+            if response.status_code == 401:
+                return False, "GitHub authentication failed (401)"
+            if response.status_code == 403:
+                return False, "GitHub access forbidden (403)"
+            if response.status_code == 404:
+                return False, f"Repository not found or inaccessible: {self.repo}"
+            return False, f"GitHub validation failed ({response.status_code})"
+        except Exception as exc:
+            return False, f"GitHub validation error: {exc}"
+
     async def get_file_content(self, repo: str, file_path: str) -> str:
         """Get file content from repository"""
         if not self.configured:
             logger.warning("GitHub not configured - cannot get file content")
             return ""
+        if not self.client:
+            logger.warning("GitHub client is not initialized")
+            return ""
+
+        client = self.client
         
         # Sanitize inputs
         import re
@@ -278,7 +329,7 @@ class GitHubService:
         try:
             url = f"/repos/{repo}/contents/{file_path}"
             
-            response = await self.client.get(
+            response = await client.get(
                 url,
                 params={"ref": self.branch}
             )
@@ -289,7 +340,7 @@ class GitHubService:
                     content = base64.b64decode(data["content"]).decode('utf-8')
                     return content
                 else:
-                    return data.get("content", "")
+                    return cast(str, data.get("content", ""))
             else:
                 logger.error(f"GitHub get file content failed: {response.status_code} - {response.text}")
                 return ""
@@ -300,6 +351,9 @@ class GitHubService:
 
     async def list_folders(self, path: str = "") -> list:
         """List folders in the repository"""
+        if not self.client:
+            return []
+
         try:
             url = f"/repos/{self.repo}/contents"
             if path:
@@ -341,13 +395,6 @@ class GitHubService:
     
     def __del__(self):
         """Cleanup when service is destroyed"""
-        if hasattr(self, 'client') and self.client and not self.client.is_closed:
-            # Schedule cleanup in the event loop if available
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.close())
-            except RuntimeError:
-                # No event loop available, client will be cleaned up by GC
-                pass
+        # Destructors run in unpredictable interpreter/loop state.
+        # Explicit lifecycle close() is handled by callers during shutdown.
+        return

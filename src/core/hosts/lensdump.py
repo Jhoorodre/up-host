@@ -17,40 +17,43 @@ class LensdumpHost(BaseHost):
     async def upload_image(self, filepath: Path) -> UploadResult:
         """Upload image to Lensdump"""
         try:
-            data = aiohttp.FormData()
-            data.add_field('source', 
-                          open(filepath, 'rb'), 
-                          filename=filepath.name,
-                          content_type='image/*')
-            
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, data=data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get('status_code') == 200:
-                            image_url = result['image']['url']
-                            logger.debug(f"Lensdump upload successful: {image_url}")
-                            return UploadResult(
-                                filename=filepath.name,
-                                url=image_url,
-                                success=True
-                            )
+                with open(filepath, 'rb') as file_handle:
+                    data = aiohttp.FormData()
+                    data.add_field(
+                        'source',
+                        file_handle,
+                        filename=filepath.name,
+                        content_type='image/*',
+                    )
+
+                    async with session.post(self.api_url, data=data) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            if result.get('status_code') == 200:
+                                image_url = result['image']['url']
+                                logger.debug(f"Lensdump upload successful: {image_url}")
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url=image_url,
+                                    success=True
+                                )
+                            else:
+                                error_msg = result.get('error', {}).get('message', 'Unknown error')
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url="",
+                                    success=False,
+                                    error=f"Lensdump API error: {error_msg}"
+                                )
                         else:
-                            error_msg = result.get('error', {}).get('message', 'Unknown error')
+                            error_text = await response.text()
                             return UploadResult(
                                 filename=filepath.name,
                                 url="",
                                 success=False,
-                                error=f"Lensdump API error: {error_msg}"
+                                error=f"HTTP {response.status}: {error_text}"
                             )
-                    else:
-                        error_text = await response.text()
-                        return UploadResult(
-                            filename=filepath.name,
-                            url="",
-                            success=False,
-                            error=f"HTTP {response.status}: {error_text}"
-                        )
                         
         except Exception as e:
             logger.error(f"Lensdump upload failed for {filepath.name}: {e}")

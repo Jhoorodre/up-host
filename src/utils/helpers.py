@@ -87,11 +87,12 @@ def find_images(directory: Path, extensions: Optional[set] = None) -> List[Path]
 
 def format_file_size(size_bytes: int) -> str:
     """Format file size in human readable format"""
+    size = float(size_bytes)
     for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f} TB"
+        if size < 1024.0:
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
 
 
 def estimate_upload_time(total_size: int, speed_mbps: float = 10.0) -> float:

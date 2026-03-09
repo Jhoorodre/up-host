@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, cast
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -27,29 +27,33 @@ class AppConfig(BaseModel):
     json_update_mode: str = "add"  # "add", "replace", "smart"
     folder_structure: str = "standard"  # "standard", "flat", "volume_based", "scan_manga_chapter", "scan_manga_volume_chapter"
     
-    hosts: Dict[str, HostConfig] = {
-        "Catbox": HostConfig(),
-        "Imgur": HostConfig(enabled=False),
-        "ImgBB": HostConfig(enabled=False),
-        "Lensdump": HostConfig(enabled=False),
-        "Pixeldrain": HostConfig(enabled=False),
-        "Gofile": HostConfig(enabled=False),
-        "ImageChest": HostConfig(enabled=False),
-        "Imgbox": HostConfig(enabled=False),
-        "ImgHippo": HostConfig(enabled=False),
-        "ImgPile": HostConfig(enabled=False, base_url="https://imgpile.com")
-    }
-    
-    github: Dict[str, Any] = {
-        "enabled": False,
-        "user": "",
-        "token": "",
-        "repo": "",
-        "branch": "main",
-        "folder": "metadata",  # Default folder for JSON files
-        "auto_upload": False,
-        "commit_message": "Update manga metadata"
-    }
+    hosts: Dict[str, HostConfig] = Field(
+        default_factory=lambda: {
+            "Catbox": HostConfig(),
+            "Imgur": HostConfig(enabled=False),
+            "ImgBB": HostConfig(enabled=False),
+            "Lensdump": HostConfig(enabled=False),
+            "Pixeldrain": HostConfig(enabled=False),
+            "Gofile": HostConfig(enabled=False),
+            "ImageChest": HostConfig(enabled=False),
+            "Imgbox": HostConfig(enabled=False),
+            "ImgHippo": HostConfig(enabled=False),
+            "ImgPile": HostConfig(enabled=False, base_url="https://imgpile.com"),
+        }
+    )
+
+    github: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": False,
+            "user": "",
+            "token": "",
+            "repo": "",
+            "branch": "main",
+            "folder": "metadata",  # Default folder for JSON files
+            "auto_upload": False,
+            "commit_message": "Update manga metadata",
+        }
+    )
 
 
 class ConfigManager:
@@ -117,5 +121,5 @@ class ConfigManager:
     
     def get_host_config(self, host_name: str) -> Optional[HostConfig]:
         """Get configuration for a specific host"""
-        return self.config.hosts.get(host_name)
+        return cast(Optional[HostConfig], self.config.hosts.get(host_name))
     

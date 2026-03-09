@@ -4,8 +4,8 @@ from PySide6.QtCore import QObject, Signal, Slot, Property
 from PySide6.QtQml import QmlElement, QJSValue
 from pathlib import Path
 import asyncio
-import json
-from typing import List, Dict, Optional
+import time
+from typing import Any, List, Optional, cast
 
 from core.config import ConfigManager
 from core.services.uploader import MangaUploaderService
@@ -27,14 +27,24 @@ class Backend(QObject):
     processingFinished = Signal()
     error = Signal(str)
     progressChanged = Signal(float)
-    metadataLoaded = Signal('QVariant')
+    metadataLoaded = Signal(dict)
     metadataUpdateCompleted = Signal()  # BULLETPROOF: Signal for GitHub button fix
     mangaInfoChanged = Signal()
     configChanged = Signal()
     mangaListChanged = Signal()
     chapterListChanged = Signal()
+    libraryLoadingFinished = Signal()  # Signal when library loading is complete
     selectedHostIndexChanged = Signal()
     githubFoldersChanged = Signal()
+    
+    # Performance monitoring signals
+    performanceChanged = Signal()
+    scanProgressChanged = Signal(int)  # Progress percentage 0-100
+    workerStatusChanged = Signal()
+    
+    # Folder dialog signals for QML integration
+    openRootFolderDialog = Signal(str)  # Emits starting directory
+    openOutputFolderDialog = Signal(str)  # Emits starting directory
     
     def __init__(self):
         super().__init__()
@@ -44,11 +54,23 @@ class Backend(QObject):
         self.uploader_service = MangaUploaderService()
         self.upload_queue = UploadQueue(max_concurrent=3)
         
+        # Progressive scanning service
+        from core.services.scan_service import ScanService
+        from core.services.performance_service import PerformanceService
+        from core.services.batch_service import BatchService
+        self.scan_service = ScanService(max_workers=4)
+        self.performance_service = PerformanceService(max_history_size=50)
+        self.batch_service = BatchService(max_concurrent_jobs=2, max_concurrent_items=3)
+        
         # Specialized handlers
         self.config_handler = ConfigHandler(self.config_manager)
         self.host_manager = HostManager(self.config_manager)
         self.manga_manager = MangaManager(self.config_manager, self.uploader_service)
         self.github_manager = GitHubManager(self.config_manager)
+        
+        # Scanning task tracking
+        self._current_scan_task: Optional[asyncio.Task[Any]] = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         
         # Legacy models (TODO: migrate to handlers)
         self.github_folder_model = GitHubFolderListModel(self)
@@ -57,8 +79,12 @@ class Backend(QObject):
         self._upload_progress = 0.0
         self._github_folders = ["metadata"]
         self._current_job_id = None
+        self._current_upload_monitor_task: Optional[asyncio.Task[Any]] = None
         self._last_json_path = None
         self._upload_metadata = None
+        self._manual_github_upload_in_progress = False
+        self._processing_active = False
+        self._is_shutting_down = False
         self._manga_info = {
             "title": "",
             "description": "",
@@ -70,6 +96,24 @@ class Backend(QObject):
             "chapterCount": 0,
             "hasJson": False
         }
+        self._last_logged_has_json: Optional[bool] = None
+        
+        # Performance monitoring state
+        self._last_scan_time = "0.0s"
+        self._active_workers = 0
+        self._total_workers = 5
+        self._cache_utilization = 0
+        self._processing_queue = 0
+        self._memory_usage = "0MB"
+        self._scan_progress = 0
+        
+        # Batch processing state
+        self._batch_queue_size = 0
+        self._batch_active_jobs = 0
+        
+        # Start memory monitoring timer
+        self._start_time = time.time()
+        self._memory_timer = None
         
         # Connect handler signals to main signals
         self._connect_handler_signals()
@@ -80,7 +124,77 @@ class Backend(QObject):
         # CRITICAL: Initialize GitHub folders on startup if configured
         self._init_github_folders()
         
-        logger.info("Backend initialized with specialized handlers")
+        # Initialize performance monitoring
+        self._init_performance_monitoring()
+        
+        # Initialize batch service
+        self._init_batch_service()
+        
+        logger.info("Backend initialized with specialized handlers, performance monitoring, and batch processing")
+
+    def _emit_processing_started(self) -> None:
+        """Emit processingStarted only on state transition."""
+        if self._processing_active:
+            return
+        self._processing_active = True
+        self.processingStarted.emit()
+
+    def _emit_processing_finished(self) -> None:
+        """Emit processingFinished only on state transition."""
+        if not self._processing_active:
+            return
+        self._processing_active = False
+        self.processingFinished.emit()
+
+    def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Handle completion of scheduled background tasks with explicit error logging."""
+        self._background_tasks.discard(task)
+
+        if task.cancelled():
+            return
+
+        try:
+            task.result()
+        except Exception as exc:
+            logger.error(f"Background task failed: {exc}")
+
+    def _schedule_task(self, coro: Any) -> Optional[asyncio.Task[Any]]:
+        """Schedule coroutine on the active loop (running or startup-configured)."""
+        if self._is_shutting_down:
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            logger.debug("Skipping background task scheduling because backend is shutting down")
+            return None
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError as exc:
+                logger.error(f"Cannot schedule background task: {exc}")
+                if asyncio.iscoroutine(coro):
+                    coro.close()
+                return None
+
+            if loop.is_closed():
+                logger.error("Cannot schedule background task: event loop is closed")
+                if asyncio.iscoroutine(coro):
+                    coro.close()
+                return None
+
+            logger.debug("Scheduling background task on configured event loop before run_forever")
+
+        try:
+            task = loop.create_task(coro)
+        except RuntimeError as exc:
+            logger.error(f"Cannot schedule background task: {exc}")
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            return None
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+        return task
     
     def _connect_handler_signals(self):
         """Connect handler signals to main backend signals"""
@@ -112,18 +226,22 @@ class Backend(QObject):
     
     def _on_upload_progress(self, manga_title: str, progress: int):
         """Handle upload progress updates"""
-        self._upload_progress = float(progress)
+        normalized = float(progress)
+        if normalized > 1.0:
+            normalized = normalized / 100.0
+        self._upload_progress = max(0.0, min(1.0, normalized))
         self.progressChanged.emit(self._upload_progress)
         logger.debug(f"Upload progress for {manga_title}: {progress}%")
     
     def _on_upload_completed(self, manga_title: str):
         """Handle upload completion"""
-        self.processingFinished.emit()
+        self._emit_processing_finished()
         logger.info(f"Upload completed for: {manga_title}")
     
     def _on_upload_failed(self, manga_title: str, error_msg: str):
         """Handle upload failure"""
         self.error.emit(error_msg)
+        self._emit_processing_finished()
         logger.error(f"Upload failed for {manga_title}: {error_msg}")
     
     def _on_github_status_changed(self, status: str):
@@ -378,28 +496,130 @@ class Backend(QObject):
     def indexadorUrlTemplate(self):
         return self.github_manager.indexadorUrlTemplate
     
+    # === PERFORMANCE MONITORING PROPERTIES ===
+    
+    @Property(str, notify=performanceChanged)
+    def lastScanTime(self):
+        """Last scan time in human readable format (e.g., '2.3s')"""
+        return self._last_scan_time
+    
+    @Property(int, notify=workerStatusChanged)
+    def activeWorkers(self):
+        """Number of currently active workers"""
+        return self._active_workers
+    
+    @Property(int, notify=workerStatusChanged)
+    def totalWorkers(self):
+        """Total number of configured workers"""
+        return self._total_workers
+    
+    @Property(int, notify=performanceChanged)
+    def cacheUtilization(self):
+        """Cache hit rate percentage (0-100)"""
+        return self._cache_utilization
+    
+    @Property(int, notify=performanceChanged)
+    def processingQueue(self):
+        """Number of items in processing queue"""
+        return self._processing_queue
+    
+    @Property(str, notify=performanceChanged)
+    def memoryUsage(self):
+        """Current memory usage in human readable format (e.g., '245MB')"""
+        self._update_memory_usage()
+        return self._memory_usage
+    
+    @Property(int, notify=scanProgressChanged)
+    def scanProgress(self):
+        """Current scan progress percentage (0-100)"""
+        return self._scan_progress
+    
+    @Property(int, notify=performanceChanged)
+    def batchQueueSize(self):
+        """Number of items in batch queue"""
+        return self._batch_queue_size
+    
+    @Property(int, notify=performanceChanged) 
+    def batchActiveJobs(self):
+        """Number of active batch jobs"""
+        return self._batch_active_jobs
+    
+    def _update_memory_usage(self):
+        """Update current memory usage"""
+        try:
+            import psutil
+            import os
+            process = psutil.Process(os.getpid())
+            memory_mb = int(process.memory_info().rss / 1024 / 1024)
+            self._memory_usage = f"{memory_mb}MB"
+        except ImportError:
+            # Fallback if psutil not available
+            import sys
+            size = sys.getsizeof(self)
+            self._memory_usage = f"{int(size / 1024 / 1024)}MB"
+        except Exception as e:
+            logger.warning(f"Could not get memory usage: {e}")
+            self._memory_usage = "0MB"
+    
+    @Slot(str)
+    def updateScanTime(self, scan_time: str):
+        """Update the last scan time and emit signal"""
+        if self._last_scan_time != scan_time:
+            self._last_scan_time = scan_time
+            self.performanceChanged.emit()
+            logger.debug(f"Scan time updated: {scan_time}")
+    
+    @Slot(int, int)
+    def updateWorkerStatus(self, active: int, total: int):
+        """Update worker status and emit signal"""
+        if self._active_workers != active or self._total_workers != total:
+            self._active_workers = active
+            self._total_workers = total
+            self.workerStatusChanged.emit()
+            logger.debug(f"Workers updated: {active}/{total}")
+    
+    @Slot(int)
+    def updateCacheUtilization(self, utilization: int):
+        """Update cache utilization percentage and emit signal"""
+        if self._cache_utilization != utilization:
+            self._cache_utilization = max(0, min(100, utilization))
+            self.performanceChanged.emit()
+            logger.debug(f"Cache utilization updated: {utilization}%")
+    
+    @Slot(int)
+    def updateProcessingQueue(self, queue_size: int):
+        """Update processing queue size and emit signal"""
+        if self._processing_queue != queue_size:
+            self._processing_queue = max(0, queue_size)
+            self.performanceChanged.emit()
+            logger.debug(f"Processing queue updated: {queue_size}")
+    
+    @Slot(int)
+    def updateScanProgress(self, progress: int):
+        """Update scan progress percentage and emit signal"""
+        progress = max(0, min(100, progress))
+        if self._scan_progress != progress:
+            self._scan_progress = progress
+            self.scanProgressChanged.emit(progress)
+            logger.debug(f"Scan progress updated: {progress}%")
+    
     # === CRITICAL MISSING METHODS FROM ORIGINAL ===
     
     @Slot()
-    def initialize_async_services(self):
+    def _initialize_async_services_legacy(self):
         """Initialize async services after event loop is ready"""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.upload_queue.start())
-            else:
-                loop.run_until_complete(self.upload_queue.start())
-        except RuntimeError:
-            pass
+        scheduled = self._schedule_task(self.upload_queue.start())
+        if scheduled is None:
+            logger.debug("Legacy async service init skipped (event loop unavailable)")
     
     @Slot()
-    def loadConfig(self):
+    def _loadConfig_legacy(self):
         """Load configuration on startup"""
-        self.config_manager.load_config()
+        self.config_manager.config = self.config_manager.load_config()
         self.configChanged.emit()
     
     @Slot()
-    def saveConfig(self):
+    def _saveConfig_legacy(self):
         """Save current configuration"""
         self.config_manager.save_config()
         self.configChanged.emit()
@@ -498,13 +718,20 @@ class Backend(QObject):
                 "imgboxSessionCookie", "imghippoApiKey", "imgpileApiKey", "imgpileBaseUrl"
             ]
             if any(key in config_dict for key in host_config_keys):
-                self.host_manager.reload_hosts()
-                logger.debug("Reloaded hosts after configuration change")
+                # Reload hosts asynchronously to prevent UI blocking
+                task = self._schedule_task(self._reload_hosts_async())
+                if task is None:
+                    logger.warning("Could not schedule async host reload after configuration change")
+                else:
+                    logger.debug("Started async host reload after configuration change")
             
-            # Refresh manga list if folder paths changed
+            # Refresh manga list if folder paths changed (asynchronously)
             if "rootFolder" in config_dict or "outputFolder" in config_dict:
-                self.manga_manager.refresh_manga_list()
-                logger.debug("Refreshed manga list after folder path change")
+                task = self._schedule_task(self._refresh_manga_list_async())
+                if task is None:
+                    logger.warning("Could not schedule async manga list refresh after folder path change")
+                else:
+                    logger.debug("Started async manga list refresh after folder path change")
             
         except Exception as e:
             error_msg = f"Erro ao salvar configuração: {str(e)}"
@@ -573,12 +800,12 @@ class Backend(QObject):
     # === CRITICAL MISSING SLOTS FROM ORIGINAL ===
     
     @Slot(str)
-    def filterMangaList(self, search_text: str):
+    def _filterMangaList_legacy(self, search_text: str):
         """Filter manga list based on search text - CRITICAL"""
         self.manga_manager.filter_manga_list(search_text)
     
     @Slot(str)
-    def loadMangaDetails(self, manga_path: str):
+    def _loadMangaDetails_legacy(self, manga_path: str):
         """Load details for specific manga - CRITICAL"""
         try:
             # Delegate to MangaManager which handles comprehensive metadata loading
@@ -619,20 +846,11 @@ class Backend(QObject):
             self.configChanged.emit()
     
     @Slot()
-    def startUpload(self):
+    def _startUpload_legacy(self):
         """Start upload process - CRITICAL"""
         try:
-            if not self.manga_manager.get_selected_chapters():
-                self.error.emit("Nenhum capítulo selecionado")
-                return
-            
-            if not self.manga_manager.get_current_manga():
-                self.error.emit("Nenhum mangá selecionado")
-                return
-            
-            # Start upload through manga manager
-            self.manga_manager.start_upload()
-            self.processingStarted.emit()
+            # Keep legacy entrypoint aligned with the real queued upload flow.
+            self.startUpload()
             
         except Exception as e:
             error_msg = f"Erro ao iniciar upload: {str(e)}"
@@ -640,7 +858,7 @@ class Backend(QObject):
             self.error.emit(error_msg)
     
     @Slot('QVariant')
-    def startUploadWithMetadata(self, metadata):
+    def _startUploadWithMetadata_legacy(self, metadata):
         """Start upload with custom metadata - CRITICAL"""
         try:
             # Store metadata for upload
@@ -656,6 +874,10 @@ class Backend(QObject):
     def saveToGitHub(self):
         """Save metadata to GitHub - COMPREHENSIVE FIXED VERSION WITH ENHANCED LOGGING"""
         try:
+            if self._manual_github_upload_in_progress:
+                self.error.emit("Upload do GitHub já está em andamento")
+                return
+
             # CRITICAL: Log the GitHub button state for debugging
             has_json = self._manga_info.get('hasJson', False)
             current_title = self._manga_info.get('title', 'None')
@@ -686,14 +908,25 @@ class Backend(QObject):
                 return
             
             logger.info(f"✅ Preparando upload do GitHub para: {json_file}")
+
+            # Keep UI processing state consistent for manual GitHub uploads.
+            self._manual_github_upload_in_progress = True
+            self._emit_processing_started()
             
             # Start GitHub upload with better error handling
-            asyncio.ensure_future(self._upload_to_github_safe(json_file))
+            task = self._schedule_task(self._upload_to_github_safe(json_file))
+            if task is None:
+                self.error.emit("Erro ao agendar upload para GitHub")
+                self._manual_github_upload_in_progress = False
+                self._emit_processing_finished()
             
         except Exception as e:
             error_msg = f"Erro ao iniciar upload do GitHub: {str(e)}"
             logger.error(error_msg)
             self.error.emit(error_msg)
+            if self._manual_github_upload_in_progress:
+                self._manual_github_upload_in_progress = False
+                self._emit_processing_finished()
     
     def _find_json_file_for_upload(self, output_folder: Path) -> Optional[Path]:
         """Find JSON file for GitHub upload using multiple strategies"""
@@ -713,12 +946,12 @@ class Backend(QObject):
                     json_file_path = manga_folder / f"{sanitized_title}.json"
                     if json_file_path.exists():
                         logger.debug(f"Found JSON file: {json_file_path}")
-                        return json_file_path
+                        return cast(Path, json_file_path)
                     
                     # Try any JSON in manga folder
                     for file in manga_folder.glob("*.json"):
                         logger.debug(f"Found JSON file: {file}")
-                        return file
+                        return cast(Path, file)
                 
                 # Strategy 1.5: Similar folder matching
                 manga_name_words = set(manga_title.lower().split())
@@ -766,16 +999,14 @@ class Backend(QObject):
             error_msg = f"Erro durante upload do GitHub: {str(e)}"
             logger.error(error_msg)
             self.error.emit(error_msg)
+        finally:
+            self._manual_github_upload_in_progress = False
+            self._emit_processing_finished()
     
     @Slot()
     def refreshGitHubFolders(self):
         """Refresh GitHub folders - CRITICAL - Delegate to GitHubManager"""
         try:
-            if not self.github_manager.is_github_configured():
-                logger.warning("GitHub not configured for folder refresh")
-                self.error.emit("GitHub não configurado para carregar pastas")
-                return
-            
             # CRITICAL: Use GitHubManager's method which now properly emits signals
             self.github_manager.refreshGitHubFolders()
             logger.debug("Delegated GitHub folders refresh to GitHubManager")
@@ -785,12 +1016,12 @@ class Backend(QObject):
             self.error.emit(f"Erro ao carregar pastas do GitHub: {str(e)}")
     
     @Slot(str)
-    def selectGitHubFolder(self, folder_path: str):
+    def _selectGitHubFolder_legacy(self, folder_path: str):
         """Select GitHub folder - CRITICAL"""
         self.github_manager.select_folder(folder_path)
     
     @Slot(str, result=str)
-    def makeJsonSafe(self, text: str) -> str:
+    def _makeJsonSafe_legacy(self, text: str) -> str:
         """Make text safe for JSON - CRITICAL utility"""
         if not text:
             return ""
@@ -821,7 +1052,8 @@ class Backend(QObject):
                     "author": metadata.get("author", ""),
                     "group": metadata.get("group", ""),
                     "cover": metadata.get("cover", ""),
-                    "status": metadata.get("status", "Em Andamento")
+                    "status": metadata.get("status", "Em Andamento"),
+                    "_requestMangaTitle": manga_title,
                 }
                 
                 # Update internal state
@@ -840,7 +1072,8 @@ class Backend(QObject):
                     "author": "",
                     "group": "",
                     "cover": "",
-                    "status": "Em Andamento"
+                    "status": "Em Andamento",
+                    "_requestMangaTitle": manga_title,
                 }
                 self.metadataLoaded.emit(default_metadata)
                 logger.debug(f"No metadata found for {manga_title}, using defaults")
@@ -851,7 +1084,7 @@ class Backend(QObject):
             self.error.emit(error_msg)
     
     @Slot('QVariant')
-    def updateExistingMetadata(self, metadata):
+    def _updateExistingMetadata_legacy(self, metadata):
         """Update existing metadata - CRITICAL FIXED FOR GITHUB BUTTON STATE"""
         try:
             # Convert QJSValue to dict if needed
@@ -894,9 +1127,6 @@ class Backend(QObject):
             # BULLETPROOF: Emit signal to force GitHub button refresh
             self.metadataUpdateCompleted.emit()
             
-            # Signal success to close the dialog
-            self.processingFinished.emit()
-            
             logger.info(f"✅ Metadata update completed for: {metadata_dict.get('title', 'Unknown')}")
             
         except Exception as e:
@@ -905,7 +1135,7 @@ class Backend(QObject):
             self.error.emit(error_msg)
     
     @Slot(str)
-    def testImgboxCookie(self, cookie):
+    def _testImgboxCookie_legacy(self, cookie):
         """Test Imgbox cookie validity - CRITICAL"""
         try:
             # Delegate to host manager for cookie testing
@@ -918,8 +1148,740 @@ class Backend(QObject):
     
     @Slot()
     def refreshMangaList(self):
-        """Refresh manga list (delegated to MangaManager)"""
-        self.manga_manager.refresh_manga_list()
+        """Refresh manga list asynchronously (delegated to MangaManager)"""
+        task = self._schedule_task(self._refresh_manga_list_async())
+        if task is None:
+            self.error.emit("Erro ao agendar recarregamento da biblioteca")
+            self.libraryLoadingFinished.emit()
+    
+    async def _refresh_manga_list_async(self):
+        """Async version of refresh manga list"""
+        try:
+            # Qt models/signals must be updated on the main thread.
+            self.manga_manager.refresh_manga_list()
+            await asyncio.sleep(0)
+            # Emit signal when finished
+            self.libraryLoadingFinished.emit()
+        except Exception as e:
+            logger.error(f"Error refreshing manga list: {e}")
+            self.error.emit(f"Erro ao carregar biblioteca: {str(e)}")
+            self.libraryLoadingFinished.emit()  # Still emit signal even on error
+    
+    @Slot(result=bool)
+    def startProgressiveScan(self):
+        """Start progressive library scanning with real-time updates"""
+        try:
+            if self._is_shutting_down:
+                logger.debug("Ignoring progressive scan request during backend shutdown")
+                return False
+
+            if self.scan_service.is_scanning:
+                logger.debug("Ignoring progressive scan request because a scan is already in progress")
+                return False
+
+            root_folder = Path(self.config_manager.config.root_folder)
+            if not root_folder.exists():
+                self.error.emit(f"Pasta raiz não existe: {root_folder}")
+                self.updateScanProgress(0)
+                self.libraryLoadingFinished.emit()
+                return False
+            
+            logger.info(f"Starting progressive library scan: {root_folder}")
+            
+            # Update worker count from current configuration
+            current_host = self.config_manager.config.selected_host
+            host_config = self.config_manager.config.hosts.get(current_host)
+            if host_config:
+                max_workers = getattr(host_config, 'max_workers', 4)
+                self.scan_service.max_workers = max_workers
+                self.updateWorkerStatus(0, max_workers)
+            
+            # Reset scan progress
+            self.updateScanProgress(0)
+            
+            # Start async scan
+            task = self._schedule_task(self._progressive_scan_async(root_folder))
+            if task is None:
+                self.error.emit("Erro ao agendar varredura progressiva")
+                self.libraryLoadingFinished.emit()
+                return False
+
+            return True
+            
+        except Exception as e:
+            error_msg = f"Erro ao iniciar varredura progressiva: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+            self.libraryLoadingFinished.emit()
+            return False
+    
+    @Slot()
+    def cancelProgressiveScan(self):
+        """Cancel the current progressive scan"""
+        try:
+            if self.scan_service.is_scanning:
+                logger.info("Cancelling progressive scan...")
+                cancel_task = self._schedule_task(self.scan_service.cancel_scan())
+                if cancel_task is None:
+                    self.error.emit("Erro ao cancelar varredura progressiva")
+                
+                # Cancel the background task if it exists
+                if self._current_scan_task and not self._current_scan_task.done():
+                    self._current_scan_task.cancel()
+                    self._current_scan_task = None
+                    
+                self.updateScanProgress(0)
+                self.updateWorkerStatus(0, self._total_workers)
+            else:
+                logger.debug("No scan in progress to cancel")
+        except Exception as e:
+            logger.error(f"Error cancelling scan: {e}")
+    
+    async def _progressive_scan_async(self, root_path: Path):
+        """Async progressive scan with real-time updates"""
+        scan_start_time = time.time()
+        
+        try:
+            # Progress callback for real-time updates
+            def on_progress(progress):
+                try:
+                    # Update scan progress
+                    self.updateScanProgress(progress.progress_percentage)
+
+                    # Update worker status using actual counters from ScanService.
+                    worker_status = self.scan_service.get_worker_status()
+                    total_workers = worker_status.get("total_workers", 0)
+                    active_workers = worker_status.get("active_workers", 0)
+                    if total_workers <= 0:
+                        total_workers = self.scan_service.max_workers
+                    self.updateWorkerStatus(active_workers, total_workers)
+                    
+                    # Update performance time
+                    self.updateScanTime(f"{progress.elapsed_time:.1f}s")
+                    
+                    logger.debug(f"Scan progress: {progress.progress_percentage}% - "
+                               f"{progress.manga_found} manga found, "
+                               f"{progress.errors} errors, "
+                               f"Rate: {progress.scan_rate:.1f} folders/s")
+                    
+                except Exception as e:
+                    logger.error(f"Error in progress callback: {e}")
+            
+            # Result callback for incremental manga updates
+            def on_result(result):
+                try:
+                    if result.success and result.manga:
+                        # Add manga to the manga manager incrementally
+                        self.manga_manager.add_manga_incremental(result.manga)
+                        
+                        logger.debug(f"Added manga incrementally: {result.manga.title} "
+                                   f"({len(result.manga.chapters)} chapters)")
+                    
+                except Exception as e:
+                    logger.error(f"Error in result callback: {e}")
+            
+            # Completion callback for when all workers finish
+            def on_completion(results):
+                try:
+                    # This will be called when all workers actually complete
+                    logger.info(f"Scan completion callback: {len(results)} total results")
+                    self._handle_scan_completion(results)
+                except Exception as e:
+                    logger.error(f"Error in completion callback: {e}")
+            
+            # Start the progressive scan in background (non-blocking)
+            scan_task = self._schedule_task(
+                self.scan_service.start_scan(
+                    root_path=root_path,
+                    progress_callback=on_progress,
+                    result_callback=on_result,
+                    completion_callback=on_completion
+                )
+            )
+
+            if scan_task is None:
+                self.error.emit("Erro ao iniciar varredura progressiva (loop indisponivel)")
+                self.libraryLoadingFinished.emit()
+                return
+            
+            # Store task reference to prevent garbage collection
+            self._current_scan_task = scan_task
+            
+            # Don't set up completion callback on task - we use the custom completion callback
+            logger.info("Progressive scan started in background - UI remains responsive")
+            return
+            
+        except Exception as e:
+            elapsed_time = time.time() - scan_start_time
+            error_msg = f"Erro durante varredura progressiva: {str(e)}"
+            logger.error(error_msg)
+            
+            # Reset status
+            self.updateScanTime(f"{elapsed_time:.1f}s")
+            self.updateScanProgress(0)
+            self.updateWorkerStatus(0, self._total_workers)
+            
+            self.error.emit(error_msg)
+            self.libraryLoadingFinished.emit()
+    
+    def _handle_scan_completion(self, results):
+        """Handle scan completion when all workers finish"""
+        try:
+            # Results are already provided as parameter
+            logger.debug(f"Handling completion for {len(results)} scan results")
+            
+            # Update cache utilization from scan statistics
+            if self.scan_service.cache_service:
+                cache_stats = self.scan_service.get_cache_statistics()
+                if cache_stats:
+                    # Update cache utilization based on hit rate
+                    self.updateCacheUtilization(int(cache_stats["hit_rate_percentage"]))
+                    logger.debug(f"Cache performance: {cache_stats['hit_rate_percentage']:.1f}% hit rate, "
+                               f"{cache_stats['entries_count']} entries, {cache_stats['total_size_mb']:.1f} MB")
+            
+            # Final updates
+            manga_count = sum(1 for r in results if r.success)
+            error_count = sum(1 for r in results if not r.success)
+            total_files = sum(r.manga.chapters and sum(len(ch.images or []) for ch in r.manga.chapters) or 0 
+                             for r in results if r.success and r.manga and r.manga.chapters)
+            
+            # Get scan statistics for performance recording
+            scan_stats = self.scan_service.scan_statistics
+            elapsed_time = scan_stats["elapsed_time"]
+            total_folders = int(scan_stats.get("total_folders", 0))
+            scanned_folders = int(scan_stats.get("scanned_folders", 0))
+            
+            # Record performance metrics
+            cache_hit_rate = 0
+            if self.scan_service.cache_service:
+                cache_stats = self.scan_service.get_cache_statistics()
+                cache_hit_rate = cache_stats["hit_rate_percentage"] if cache_stats else 0
+            
+            # Record in performance service
+            performance_metric = self.performance_service.record_scan_performance(
+                scan_time=elapsed_time,
+                folder_count=len(results),
+                file_count=total_files,
+                cache_hit_rate=cache_hit_rate,
+                worker_count=self._total_workers
+            )
+            
+            self.updateScanTime(f"{elapsed_time:.1f}s")
+            if total_folders > 0:
+                final_progress = int(min(100, (scanned_folders / total_folders) * 100))
+            else:
+                final_progress = 100
+            self.updateScanProgress(final_progress)
+            self.updateWorkerStatus(0, self._total_workers)  # No workers active after completion
+            
+            # Update performance grade in UI
+            if performance_metric:
+                logger.info(f"Performance grade: {performance_metric.performance_grade} "
+                           f"(scan rate: {performance_metric.scan_rate:.1f} folders/s)")
+            
+            # Emit completion signal
+            self.libraryLoadingFinished.emit()
+            
+            cancelled = total_folders > 0 and scanned_folders < total_folders
+            if cancelled:
+                logger.info(
+                    f"Progressive scan interrupted: {manga_count} manga loaded, "
+                    f"{error_count} errors, {scanned_folders}/{total_folders} folders in {elapsed_time:.2f}s"
+                )
+            else:
+                logger.success(f"Progressive scan completed: {manga_count} manga loaded, "
+                             f"{error_count} errors in {elapsed_time:.2f}s")
+            
+            # Clear task reference
+            self._current_scan_task = None
+            
+        except Exception as e:
+            logger.error(f"Error in scan completion callback: {e}")
+            self.updateScanProgress(0)
+            self.updateWorkerStatus(0, self._total_workers)
+            self.error.emit(f"Erro ao finalizar varredura: {str(e)}")
+            self.libraryLoadingFinished.emit()
+            self._current_scan_task = None
+    
+    @Slot()
+    def clearCache(self):
+        """Clear manga scanning cache"""
+        try:
+            if self.scan_service.clear_cache():
+                self.updateCacheUtilization(0)
+                logger.info("Cache cleared successfully")
+            else:
+                logger.warning("Cache service not available")
+        except Exception as e:
+            error_msg = f"Erro ao limpar cache: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot()
+    def optimizeCache(self):
+        """Optimize cache by removing stale entries"""
+        try:
+            results = self.scan_service.optimize_cache()
+            if results:
+                logger.info(f"Cache optimized: removed {results.get('stale_removed', 0) + results.get('invalid_removed', 0)} entries")
+                # Update cache utilization
+                cache_stats = self.scan_service.get_cache_statistics()
+                if cache_stats:
+                    self.updateCacheUtilization(int(cache_stats["hit_rate_percentage"]))
+            else:
+                logger.warning("Cache service not available")
+        except Exception as e:
+            error_msg = f"Erro ao otimizar cache: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot(result='QVariant')
+    def getCacheStatistics(self):
+        """Get detailed cache statistics for QML"""
+        try:
+            cache_stats = self.scan_service.get_cache_statistics()
+            if cache_stats:
+                return {
+                    "enabled": True,
+                    "hitRate": cache_stats["hit_rate_percentage"],
+                    "totalEntries": cache_stats["entries_count"],
+                    "sizeMB": cache_stats["total_size_mb"],
+                    "oldestEntryHours": cache_stats["oldest_entry_age_hours"]
+                }
+            else:
+                return {"enabled": False}
+        except Exception as e:
+            logger.error(f"Error getting cache statistics: {e}")
+            return {"enabled": False, "error": str(e)}
+    
+    @Slot(result=str)
+    def getPerformanceGrade(self):
+        """Get current performance grade for QML"""
+        try:
+            return self.performance_service.get_current_performance_grade()
+        except Exception as e:
+            logger.error(f"Error getting performance grade: {e}")
+            return "N/A"
+    
+    @Slot(result='QVariant')
+    def getPerformanceSummary(self):
+        """Get performance summary for QML"""
+        try:
+            summary = self.performance_service.get_performance_summary()
+            return {
+                "grade": summary.get("current_grade", "N/A"),
+                "scanRate": summary.get("scan_rate", 0),
+                "cacheHitRate": summary.get("cache_hit_rate", 0),
+                "memoryUsageMB": summary.get("memory_usage_mb", 0),
+                "trend": summary.get("performance_trend", "unknown"),
+                "bottlenecks": summary.get("bottlenecks", []),
+                "recommendations": summary.get("recommendations", []),
+                "optimalWorkers": summary.get("optimal_worker_count", 4)
+            }
+        except Exception as e:
+            logger.error(f"Error getting performance summary: {e}")
+            return {"grade": "Error", "error": str(e)}
+    
+    @Slot(result='QVariant')
+    def getOptimizationSuggestions(self):
+        """Get optimization suggestions for QML"""
+        try:
+            suggestions = self.performance_service.get_optimization_suggestions()
+            return suggestions[:5]  # Return top 5 suggestions
+        except Exception as e:
+            logger.error(f"Error getting optimization suggestions: {e}")
+            return ["Erro ao obter sugestões de otimização"]
+    
+    @Slot()
+    def autoOptimizePerformance(self):
+        """Automatically optimize performance based on analysis"""
+        try:
+            analysis = self.performance_service.analyze_performance()
+            
+            # Auto-adjust worker count if recommended
+            if analysis.optimal_worker_count != self._total_workers:
+                old_workers = self._total_workers
+                self._total_workers = analysis.optimal_worker_count
+                self.scan_service.max_workers = analysis.optimal_worker_count
+                self.updateWorkerStatus(self._active_workers, self._total_workers)
+                
+                logger.info(f"Auto-optimized workers: {old_workers} → {analysis.optimal_worker_count}")
+            
+            # Optimize cache if needed
+            if "low_cache_hit_rate" in analysis.bottlenecks:
+                self.optimizeCache()
+            
+            # Log optimization results
+            logger.info(f"Auto-optimization completed: Grade {analysis.current_grade}, "
+                       f"Trend: {analysis.performance_trend}")
+            
+        except Exception as e:
+            error_msg = f"Erro na otimização automática: {str(e)}"
+            logger.error(error_msg)
+            self.error.emit(error_msg)
+    
+    @Slot(result=bool)
+    def isPerformanceDegrading(self):
+        """Check if performance is degrading over time"""
+        try:
+            return self.performance_service.is_performance_degrading()
+        except Exception as e:
+            logger.error(f"Error checking performance degradation: {e}")
+            return False
+    
+    @Slot(result='QVariant')
+    def getBatchQueueStatus(self):
+        """Get batch queue status for QML"""
+        try:
+            status = self.batch_service.get_queue_status()
+            jobs = self.batch_service.get_all_jobs()
+
+            completed_jobs = sum(1 for job in jobs if job.status.value == "completed")
+            failed_jobs = sum(1 for job in jobs if job.status.value == "failed")
+            finished_jobs = [job for job in jobs if job.status.value in {"completed", "failed", "cancelled"}]
+
+            avg_time_per_item = 0.0
+            item_durations = [item.duration_seconds for job in finished_jobs for item in job.items if item.duration_seconds > 0]
+            if item_durations:
+                avg_time_per_item = sum(item_durations) / len(item_durations)
+
+            total_processed = completed_jobs + failed_jobs
+            success_rate = (completed_jobs / total_processed) if total_processed > 0 else 0.0
+
+            return {
+                "serviceRunning": status.get("service_running", False),
+                "activeJobs": status.get("running_jobs", 0),
+                "queueSize": status.get("queue_size", 0),
+                "runningJobs": status.get("running_jobs", 0),
+                "pendingJobs": status.get("pending_jobs", 0),
+                "queuedJobs": status.get("queued_jobs", 0),
+                "totalJobs": status.get("total_jobs", 0),
+                "completedJobs": completed_jobs,
+                "failedJobs": failed_jobs,
+                "successRate": success_rate,
+                "averageTimePerItem": avg_time_per_item,
+            }
+        except Exception as e:
+            logger.error(f"Error getting batch queue status: {e}")
+            return {"serviceRunning": False, "error": str(e)}
+    
+    @Slot(result='QVariant')
+    def getAllBatchJobs(self):
+        """Get all batch jobs for QML"""
+        try:
+            jobs = self.batch_service.get_all_jobs()
+            return [{
+                "jobId": job.job_id,
+                "job_id": job.job_id,
+                "title": job.title,
+                "description": job.description,
+                "status": job.status.value,
+                "progress": job.total_progress,
+                "totalProgress": job.total_progress,
+                "items": [item.item_id for item in job.items],
+                "itemsTotal": len(job.items),
+                "itemsCompleted": job.items_completed,
+                "itemsFailed": job.items_failed,
+                "duration": job.duration_seconds
+            } for job in jobs]
+        except Exception as e:
+            logger.error(f"Error getting batch jobs: {e}")
+            return []
+    
+    @Slot(str, result=bool)
+    def pauseBatchJob(self, job_id: str):
+        """Pause a batch job"""
+        try:
+            result = self.batch_service.pause_job(job_id)
+            if result:
+                self._update_batch_status()
+            return result
+        except Exception as e:
+            logger.error(f"Error pausing batch job: {e}")
+            return False
+    
+    @Slot(str, result=bool)
+    def resumeBatchJob(self, job_id: str):
+        """Start pending job or resume a paused batch job."""
+        try:
+            if self._is_shutting_down:
+                return False
+
+            job = self.batch_service.get_job(job_id)
+            if job is None:
+                return False
+
+            if job.status.value == "pending":
+                task = self._schedule_task(self.batch_service.submit_job(job_id))
+                if task is None:
+                    return False
+                self._update_batch_status()
+                return True
+
+            if job.status.value == "paused":
+                resumed = self.batch_service.resume_job(job_id)
+                if not resumed:
+                    return False
+                task = self._schedule_task(self.batch_service.submit_job(job_id))
+                if task is None:
+                    # Roll back optimistic resume when enqueue scheduling fails.
+                    self.batch_service.pause_job(job_id)
+                    return False
+                self._update_batch_status()
+                return True
+
+            return False
+        except Exception as e:
+            logger.error(f"Error resuming batch job: {e}")
+            return False
+    
+    @Slot(str, result=bool)
+    def cancelBatchJob(self, job_id: str):
+        """Cancel a batch job"""
+        try:
+            result = self.batch_service.cancel_job(job_id)
+            if result:
+                self._update_batch_status()
+            return result
+        except Exception as e:
+            logger.error(f"Error cancelling batch job: {e}")
+            return False
+    
+    @Slot(str, result=bool)
+    def deleteBatchJob(self, job_id: str):
+        """Delete a completed batch job"""
+        try:
+            result = self.batch_service.delete_job(job_id)
+            if result:
+                self._update_batch_status()
+            return result
+        except Exception as e:
+            logger.error(f"Error deleting batch job: {e}")
+            return False
+
+    @Slot()
+    def startAllBatchJobs(self):
+        """Submit all pending batch jobs for processing."""
+        if self._is_shutting_down:
+            self.error.emit("Backend em desligamento; nao e possivel iniciar jobs em lote")
+            return
+
+        task = self._schedule_task(self._start_all_batch_jobs_async())
+        if task is None:
+            self.error.emit("Erro ao iniciar jobs em lote")
+
+    async def _start_all_batch_jobs_async(self) -> None:
+        submitted = 0
+        try:
+            if self._is_shutting_down:
+                return
+
+            for job in self.batch_service.get_all_jobs():
+                if self._is_shutting_down:
+                    break
+                if job.status.value == "pending":
+                    ok = await self.batch_service.submit_job(job.job_id)
+                    if ok:
+                        submitted += 1
+            self._update_batch_status()
+            logger.info(f"Submitted {submitted} pending batch jobs")
+        except Exception as exc:
+            logger.error(f"Error starting batch jobs: {exc}")
+            self.error.emit(f"Erro ao iniciar jobs em lote: {exc}")
+
+    @Slot(result=int)
+    def pauseAllRunningBatchJobs(self):
+        """Pause all currently running batch jobs."""
+        paused = 0
+        try:
+            for job in self.batch_service.get_all_jobs():
+                if job.status.value == "running" and self.batch_service.pause_job(job.job_id):
+                    paused += 1
+            self._update_batch_status()
+            logger.info(f"Paused {paused} running batch jobs")
+            return paused
+        except Exception as exc:
+            logger.error(f"Error pausing running batch jobs: {exc}")
+            self.error.emit(f"Erro ao pausar jobs em lote: {exc}")
+            return 0
+
+    @Slot()
+    def retryFailedBatchJobs(self):
+        """Reset failed/cancelled jobs to pending and submit them again."""
+        if self._is_shutting_down:
+            self.error.emit("Backend em desligamento; nao e possivel reagendar jobs")
+            return
+
+        previous_states: Dict[str, Dict[str, Any]] = {}
+        try:
+            from core.services.batch_service import BatchJobStatus
+
+            retry_job_ids: List[str] = []
+            for job in self.batch_service.get_all_jobs():
+                if job.status.value not in {"failed", "cancelled"}:
+                    continue
+
+                previous_states[job.job_id] = {
+                    "job_status": job.status,
+                    "job_total_progress": job.total_progress,
+                    "job_start_time": job.start_time,
+                    "job_completion_time": job.completion_time,
+                    "item_states": [
+                        {
+                            "status": item.status,
+                            "progress": item.progress,
+                            "error_message": item.error_message,
+                            "start_time": item.start_time,
+                            "completion_time": item.completion_time,
+                        }
+                        for item in job.items
+                    ],
+                }
+
+                # Apply state transition synchronously so immediate CLEAR clicks
+                # cannot delete jobs that were explicitly requested for retry.
+                job.status = BatchJobStatus.PENDING
+                job.total_progress = 0.0
+                job.start_time = None
+                job.completion_time = None
+
+                for item in job.items:
+                    item.status = BatchJobStatus.PENDING
+                    item.progress = 0.0
+                    item.error_message = None
+                    item.start_time = None
+                    item.completion_time = None
+
+                retry_job_ids.append(job.job_id)
+
+            self._update_batch_status()
+
+        except Exception as exc:
+            logger.error(f"Error preparing retry for failed batch jobs: {exc}")
+            self.error.emit(f"Erro ao preparar reagendamento de jobs falhos: {exc}")
+            return
+
+        task = self._schedule_task(self._retry_failed_batch_jobs_async(retry_job_ids))
+        if task is None:
+            # Roll back optimistic transition when task scheduling fails.
+            for job_id in retry_job_ids:
+                job = self.batch_service.get_job(job_id)
+                previous = previous_states.get(job_id)
+                if not job or not previous:
+                    continue
+
+                job.status = previous["job_status"]
+                job.total_progress = previous["job_total_progress"]
+                job.start_time = previous["job_start_time"]
+                job.completion_time = previous["job_completion_time"]
+
+                for item, item_state in zip(job.items, previous["item_states"]):
+                    item.status = item_state["status"]
+                    item.progress = item_state["progress"]
+                    item.error_message = item_state["error_message"]
+                    item.start_time = item_state["start_time"]
+                    item.completion_time = item_state["completion_time"]
+
+            self._update_batch_status()
+            self.error.emit("Erro ao reagendar jobs falhos")
+
+    async def _retry_failed_batch_jobs_async(self, retry_job_ids: List[str]) -> None:
+        retried = 0
+        try:
+            for job_id in retry_job_ids:
+                if self._is_shutting_down:
+                    break
+                ok = await self.batch_service.submit_job(job_id)
+                if ok:
+                    retried += 1
+
+            self._update_batch_status()
+            logger.info(f"Retried {retried} failed/cancelled batch jobs")
+        except Exception as exc:
+            logger.error(f"Error retrying failed batch jobs: {exc}")
+            self.error.emit(f"Erro ao reagendar jobs falhos: {exc}")
+
+    @Slot(result=int)
+    def clearFinishedBatchJobs(self):
+        """Delete completed/failed/cancelled jobs from history."""
+        deleted = 0
+        try:
+            for job in list(self.batch_service.get_all_jobs()):
+                if job.status.value in {"completed", "failed", "cancelled"}:
+                    if self.batch_service.delete_job(job.job_id):
+                        deleted += 1
+            self._update_batch_status()
+            logger.info(f"Deleted {deleted} finished batch jobs")
+            return deleted
+        except Exception as exc:
+            logger.error(f"Error clearing finished batch jobs: {exc}")
+            self.error.emit(f"Erro ao limpar jobs finalizados: {exc}")
+            return 0
+    
+    async def _reload_hosts_async(self):
+        """Async version of reload hosts"""
+        try:
+            # HostManager emits Qt signals; keep it on the main thread.
+            self.host_manager.reload_hosts()
+            self._sync_uploader_hosts_from_manager()
+            await asyncio.sleep(0)
+        except Exception as e:
+            logger.error(f"Error reloading hosts: {e}")
+            self.error.emit(f"Erro ao recarregar hosts: {str(e)}")
+    
+    @Slot()
+    def selectRootFolder(self):
+        """Trigger QML folder selection dialog for root manga folder"""
+        try:
+            current_folder = self.config_manager.config.root_folder
+            if current_folder and Path(current_folder).exists():
+                start_dir = str(current_folder)
+            else:
+                start_dir = str(Path.home())
+            
+            # Emit signal to trigger QML FolderDialog
+            self.openRootFolderDialog.emit(start_dir)
+        except Exception as e:
+            logger.error(f"Error opening root folder dialog: {e}")
+    
+    @Slot(str)
+    def setRootFolder(self, folder_path: str):
+        """Set root folder from QML dialog result"""
+        try:
+            if folder_path:
+                # Clean QML file:// URLs if present
+                clean_path = self._clean_file_url(folder_path)
+                self.config_handler.set_root_folder(clean_path)
+                logger.info(f"Root folder set to: {clean_path}")
+        except Exception as e:
+            logger.error(f"Error setting root folder: {e}")
+    
+    @Slot()
+    def selectOutputFolder(self):
+        """Trigger QML folder selection dialog for output metadata folder"""
+        try:
+            current_folder = self.config_manager.config.output_folder
+            if current_folder and Path(current_folder).exists():
+                start_dir = str(current_folder)
+            else:
+                start_dir = str(Path.home())
+            
+            # Emit signal to trigger QML FolderDialog
+            self.openOutputFolderDialog.emit(start_dir)
+        except Exception as e:
+            logger.error(f"Error opening output folder dialog: {e}")
+    
+    @Slot(str)
+    def setOutputFolder(self, folder_path: str):
+        """Set output folder from QML dialog result"""
+        try:
+            if folder_path:
+                # Clean QML file:// URLs if present
+                clean_path = self._clean_file_url(folder_path)
+                self.config_handler.set_output_folder(clean_path)
+                logger.info(f"Output folder set to: {clean_path}")
+        except Exception as e:
+            logger.error(f"Error setting output folder: {e}")
     
     @Slot(str)
     def selectManga(self, manga_title: str):
@@ -934,14 +1896,14 @@ class Backend(QObject):
         self.manga_manager.set_selected_chapters(chapter_indices)
     
     @Slot()
-    def toggleChapterOrder(self):
+    def _toggleChapterOrder_legacy(self):
         """Toggle chapter order (delegated to MangaManager)"""
         self.manga_manager.toggle_chapter_order()
     
     @Slot(result=str)
     def getMangaInfo(self) -> str:
         """Get manga info (delegated to MangaManager)"""
-        return self.manga_manager.get_manga_info()
+        return cast(str, self.manga_manager.get_manga_info())
     
     # === LEGACY PROPERTIES AND METHODS ===
     # TODO: Migrate these to handlers
@@ -958,7 +1920,7 @@ class Backend(QObject):
     def githubFolders(self):
         return getattr(self, '_github_folders', ["metadata"])
     
-    @Property('QVariant', notify=mangaInfoChanged)
+    @Property(object, notify=mangaInfoChanged)
     def mangaInfo(self):
         return self._manga_info
     
@@ -989,7 +1951,7 @@ class Backend(QObject):
     
     @Property(str, notify=mangaInfoChanged)
     def currentMangaStatus(self):
-        return self._manga_info.get("status", "")
+        return cast(str, self._manga_info.get("status", ""))
     
     @Property(int, notify=mangaInfoChanged)
     def currentMangaChapterCount(self):
@@ -1005,12 +1967,14 @@ class Backend(QObject):
         if not cached_value:
             actual_exists = self._check_json_exists_for_current_manga()
             if actual_exists:
-                logger.warning(f"🔧 CACHE MISMATCH DETECTED: cached=False but JSON exists! Fixing cache...")
+                logger.warning("🔧 CACHE MISMATCH DETECTED: cached=False but JSON exists! Fixing cache...")
                 # Update cache to reflect reality
                 self._manga_info["hasJson"] = True
                 cached_value = True
         
-        logger.debug(f"🔍 QML requesting currentMangaHasJson: {cached_value}")
+        if self._last_logged_has_json != bool(cached_value):
+            logger.debug(f"🔍 QML requesting currentMangaHasJson: {cached_value}")
+            self._last_logged_has_json = bool(cached_value)
         return cached_value
     
     # === MISSING CRITICAL METHODS ===
@@ -1018,19 +1982,41 @@ class Backend(QObject):
     @Slot()
     def initialize_async_services(self):
         """Initialize async services after event loop is ready"""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.upload_queue.start())
-            else:
-                loop.run_until_complete(self.upload_queue.start())
-        except RuntimeError:
-            pass
+        scheduled = self._schedule_task(self.upload_queue.start())
+        if scheduled is None:
+            logger.debug("Async service init skipped (event loop unavailable)")
     
     @Slot()
     def loadConfig(self):
         """Load configuration on startup"""
-        self.config_manager.load_config()
+        try:
+            current_config = self.config_manager.config
+            old_runtime_signature = (
+                current_config.selected_host,
+                current_config.github,
+                {name: cfg.model_dump() for name, cfg in current_config.hosts.items()},
+            )
+
+            loaded_config = self.config_manager.load_config()
+            self.config_manager.config = loaded_config
+
+            new_runtime_signature = (
+                loaded_config.selected_host,
+                loaded_config.github,
+                {name: cfg.model_dump() for name, cfg in loaded_config.hosts.items()},
+            )
+
+            # Keep runtime services aligned only when runtime-relevant config changed.
+            if old_runtime_signature != new_runtime_signature:
+                self.host_manager.reload_hosts()
+                self._sync_uploader_hosts_from_manager()
+                self.github_manager._init_github_service()
+
+            self.configChanged.emit()
+            self.selectedHostIndexChanged.emit()
+        except Exception as e:
+            logger.error(f"Error loading configuration: {e}")
+            self.error.emit(f"Erro ao carregar configuração: {e}")
     
     @Slot()
     def saveConfig(self):
@@ -1051,18 +2037,24 @@ class Backend(QObject):
         }
         self.startUploadWithMetadata(default_metadata)
     
-    @Slot('QVariant')
+    @Slot('QVariant', result=bool)
     def startUploadWithMetadata(self, metadata):
         """Start uploading selected chapters with metadata"""
+        processing_started = False
         try:
+            monitor_task = self._current_upload_monitor_task
+            if self._current_job_id is not None or (monitor_task and not monitor_task.done()):
+                self.error.emit("Upload ja esta em andamento")
+                return False
+
             if not self.manga_manager.current_manga:
                 self.error.emit("Nenhum mangá selecionado")
-                return
+                return False
             
             selected_chapters = self.manga_manager.getSelectedChapters()
             if not selected_chapters:
                 self.error.emit("Nenhum capítulo selecionado")
-                return
+                return False
             
             # Convert QJSValue to Python dict if needed
             if isinstance(metadata, QJSValue):
@@ -1075,21 +2067,31 @@ class Backend(QObject):
             if not isinstance(metadata_dict, dict):
                 error_msg = f"Dados de metadados inválidos: {type(metadata_dict)}"
                 self.error.emit(error_msg)
-                return
+                return False
             
             # Fix escaped newlines
             if 'description' in metadata_dict and isinstance(metadata_dict['description'], str):
                 metadata_dict['description'] = metadata_dict['description'].replace('\\n', '\n')
             
             self._upload_metadata = metadata_dict
-            self.processingStarted.emit()
+            self._emit_processing_started()
+            processing_started = True
             
             # Add to queue
-            asyncio.ensure_future(self._queue_upload(selected_chapters))
+            task = self._schedule_task(self._queue_upload(selected_chapters))
+            if task is None:
+                self.error.emit("Erro ao agendar upload")
+                self._emit_processing_finished()
+                return False
+
+            return True
             
         except Exception as e:
             logger.error(f"Error in startUploadWithMetadata: {e}")
             self.error.emit(f"Erro ao iniciar upload: {str(e)}")
+            if processing_started:
+                self._emit_processing_finished()
+            return False
     
     async def _queue_upload(self, selected_chapters: List[str]):
         """Queue upload job"""
@@ -1098,84 +2100,93 @@ class Backend(QObject):
                 self._upload_async,
                 selected_chapters
             )
-            asyncio.ensure_future(self._monitor_job(job_id))
+            self._current_job_id = job_id
+            monitor_task = self._schedule_task(self._monitor_job(job_id))
+            if monitor_task is None:
+                # Fallback: monitor in this task so UI state can still be finalized.
+                await self._monitor_job(job_id)
+            else:
+                self._current_upload_monitor_task = monitor_task
         except Exception as e:
             self.error.emit(f"Erro ao enfileirar upload: {str(e)}")
+            self._emit_processing_finished()
     
     async def _monitor_job(self, job_id: str):
         """Monitor upload job progress"""
-        while True:
-            try:
-                job = await self.upload_queue.wait_for_job(job_id, timeout=1.0)
-                if job:
-                    if job.status.value == "completed":
-                        self._upload_progress = 1.0
-                        self.progressChanged.emit(1.0)
-                        self.processingFinished.emit()
-                        break
-                    elif job.status.value == "failed":
-                        self.error.emit(f"Upload failed: {job.error}")
-                        self.processingFinished.emit()
-                        break
-            except asyncio.TimeoutError:
-                pass
-            await asyncio.sleep(0.5)
+        try:
+            while True:
+                try:
+                    job = await self.upload_queue.wait_for_job(job_id, timeout=1.0)
+                    if job:
+                        if job.status.value == "completed":
+                            self._upload_progress = 1.0
+                            self.progressChanged.emit(1.0)
+                            self._emit_processing_finished()
+                            break
+                        elif job.status.value == "failed":
+                            self.error.emit(f"Upload failed: {job.error}")
+                            self._emit_processing_finished()
+                            break
+                except asyncio.TimeoutError:
+                    pass
+                await asyncio.sleep(0.5)
+        finally:
+            if self._current_job_id == job_id:
+                self._current_job_id = None
+            current_task = asyncio.current_task()
+            if self._current_upload_monitor_task is current_task:
+                self._current_upload_monitor_task = None
     
     async def _upload_async(self, selected_chapters: List[str]):
         """Async upload handler"""
-        try:
-            from core.models import Chapter
-            
-            chapters_to_upload = []
-            current_manga = self.manga_manager.current_manga
-            
-            for chapter_name in selected_chapters:
-                chapter_path = current_manga.path / chapter_name
-                if chapter_path.exists():
-                    chapter = Chapter(name=chapter_name, path=chapter_path, images=[])
-                    chapters_to_upload.append(chapter)
-            
-            if not chapters_to_upload:
-                self.error.emit("Nenhum capítulo válido selecionado")
-                return
-            
-            # Set host in uploader service
-            current_host = self.host_manager.get_current_host()
-            if not current_host:
-                self.error.emit("Nenhum host configurado")
-                return
-            
-            self.uploader_service.register_host(self.host_manager.selectedHost, current_host)
-            self.uploader_service.set_host(self.host_manager.selectedHost)
-            
-            # Upload
-            results = await self.uploader_service.upload_manga(
-                current_manga,
-                chapters_to_upload
-            )
-            
-            # Generate metadata
-            output_path = self.config_manager.config.output_folder / current_manga.title / f"{current_manga.title}.json"
-            update_mode = self.config_manager.config.json_update_mode
-            saved_json_path = await self.uploader_service.generate_metadata(
-                current_manga,
-                results,
-                output_path,
-                update_mode,
-                self._upload_metadata
-            )
-            
-            self._last_json_path = saved_json_path
-            
-            # Auto-upload to GitHub if configured
-            if self.github_manager.is_github_configured():
-                asyncio.ensure_future(self._upload_to_github(saved_json_path))
-            
-            self.processingFinished.emit()
-            
-        except Exception as e:
-            self.error.emit(f"Erro no upload: {str(e)}")
-            self.processingFinished.emit()
+        from core.models import Chapter
+
+        current_manga = self.manga_manager.current_manga
+        if current_manga is None:
+            raise ValueError("Nenhum mangá selecionado")
+
+        chapters_to_upload = []
+        for chapter_name in selected_chapters:
+            chapter_path = current_manga.path / chapter_name
+            if chapter_path.exists():
+                chapter = Chapter(name=chapter_name, path=chapter_path, images=[])
+                chapters_to_upload.append(chapter)
+
+        if not chapters_to_upload:
+            raise ValueError("Nenhum capítulo válido selecionado")
+
+        # Set host in uploader service
+        current_host = self.host_manager.get_current_host()
+        if not current_host:
+            raise ValueError("Nenhum host configurado")
+
+        self.uploader_service.register_host(self.host_manager.selectedHost, current_host)
+        self.uploader_service.set_host(self.host_manager.selectedHost)
+
+        # Upload
+        results = await self.uploader_service.upload_manga(
+            current_manga,
+            chapters_to_upload
+        )
+
+        # Generate metadata
+        output_path = self.config_manager.config.output_folder / current_manga.title / f"{current_manga.title}.json"
+        update_mode = self.config_manager.config.json_update_mode
+        saved_json_path = await self.uploader_service.generate_metadata(
+            current_manga,
+            results,
+            output_path,
+            update_mode,
+            self._upload_metadata
+        )
+
+        self._last_json_path = saved_json_path
+
+        # Auto-upload to GitHub if configured
+        if self.github_manager.is_github_configured():
+            # Keep the queued upload lifecycle consistent: only mark upload as finished
+            # after the optional automatic GitHub publish step completes.
+            await self._upload_to_github(saved_json_path)
     
     async def _upload_to_github(self, json_file: Path):
         """Upload metadata file to GitHub - ENHANCED WITH BETTER FEEDBACK"""
@@ -1233,8 +2244,6 @@ class Backend(QObject):
             if success:
                 success_msg = f"✅ Arquivo {json_file.name} enviado com sucesso para {repo}"
                 logger.success(success_msg)
-                # Use processingFinished to indicate success to QML
-                self.processingFinished.emit()
             else:
                 error_msg = f"❌ Falha no upload para GitHub: {repo}/{remote_path}"
                 logger.error(error_msg)
@@ -1269,13 +2278,13 @@ class Backend(QObject):
         return safe_text
     
     
-    @Slot('QVariant')
+    @Slot('QVariant', result=bool)
     def updateExistingMetadata(self, metadata):
         """Update existing metadata file"""
         try:
             if not self.manga_manager.current_manga:
                 self.error.emit("Nenhum mangá selecionado")
-                return
+                return False
             
             # Convert QJSValue to dict
             if isinstance(metadata, QJSValue):
@@ -1285,7 +2294,7 @@ class Backend(QObject):
             
             if not isinstance(metadata_dict, dict):
                 self.error.emit("Dados de metadados inválidos")
-                return
+                return False
             
             # Fix escaped newlines
             if 'description' in metadata_dict:
@@ -1299,23 +2308,29 @@ class Backend(QObject):
             
             # BULLETPROOF: Emit signal to force GitHub button refresh
             self.metadataUpdateCompleted.emit()
-            
-            self.processingFinished.emit()
+            return True
             
         except Exception as e:
             logger.error(f"Error updating metadata: {e}")
             self.error.emit(f"Erro ao atualizar metadados: {str(e)}")
+            return False
     
     def _init_hosts(self):
         """Initialize hosts"""
-        self.host_manager.reload_hosts()
-        
-        # Register hosts with uploader service
+        if not self.host_manager.hosts:
+            self.host_manager.reload_hosts()
+        else:
+            logger.debug("Reusing already initialized hosts from HostManager")
+
+        self._sync_uploader_hosts_from_manager()
+
+    def _sync_uploader_hosts_from_manager(self) -> None:
+        """Sync uploader host registry with HostManager instances."""
         for host_name in self.host_manager.host_list:
             host_instance = self.host_manager.get_host(host_name)
             if host_instance:
                 self.uploader_service.register_host(host_name, host_instance)
-        
+
         self.uploader_service.set_host(self.config_manager.config.selected_host)
     
     def _init_github_folders(self):
@@ -1334,17 +2349,208 @@ class Backend(QObject):
             # Ensure fallback folders are available
             self._github_folders = ["", "metadata"]
     
+    def _init_performance_monitoring(self):
+        """Initialize performance monitoring with realistic defaults"""
+        try:
+            from PySide6.QtCore import QTimer
+            
+            # Set initial values based on current configuration
+            current_host = self.config_manager.config.selected_host
+            host_config = self.config_manager.config.hosts.get(current_host)
+            if host_config:
+                self._total_workers = getattr(host_config, 'max_workers', 5)
+            else:
+                self._total_workers = 5
+            
+            self._active_workers = 0
+            self._last_scan_time = "0.0s"
+            self._cache_utilization = 0
+            self._processing_queue = 0
+            self._scan_progress = 0
+            
+            # Update initial memory usage
+            self._update_memory_usage()
+            
+            # Start periodic memory monitoring (every 5 seconds)
+            self._memory_timer = QTimer()
+            self._memory_timer.timeout.connect(self._periodic_memory_update)
+            self._memory_timer.start(5000)  # 5 seconds
+            
+            logger.debug(f"Performance monitoring initialized: {self._total_workers} workers, {self._memory_usage} memory")
+            
+        except Exception as e:
+            logger.error(f"Error initializing performance monitoring: {e}")
+    
+    def _periodic_memory_update(self):
+        """Periodically update memory usage for footer display"""
+        try:
+            old_usage = self._memory_usage
+            self._update_memory_usage()
+            if old_usage != self._memory_usage:
+                self.performanceChanged.emit()
+        except Exception as e:
+            logger.debug(f"Error in periodic memory update: {e}")
+    
+    def _init_batch_service(self):
+        """Initialize batch processing service"""
+        try:
+            # Set up batch service callbacks
+            self.batch_service.set_callbacks(
+                job_progress_callback=self._on_batch_job_progress,
+                job_completed_callback=self._on_batch_job_completed,
+                item_completed_callback=self._on_batch_item_completed
+            )
+            
+            # Start batch service
+            task = self._schedule_task(self.batch_service.start_service())
+            if task is None:
+                logger.warning("Could not schedule batch service startup")
+            
+            # Update initial batch status
+            self._update_batch_status()
+            
+            logger.debug("Batch service initialized")
+            
+        except Exception as e:
+            logger.error(f"Error initializing batch service: {e}")
+    
+    def _on_batch_job_progress(self, job_id: str, progress: float):
+        """Callback for batch job progress updates"""
+        try:
+            self._update_batch_status()
+            logger.debug(f"Batch job {job_id}: {progress:.1f}% complete")
+        except Exception as e:
+            logger.error(f"Error in batch job progress callback: {e}")
+    
+    def _on_batch_job_completed(self, job_id: str, job):
+        """Callback for batch job completion"""
+        try:
+            self._update_batch_status()
+            logger.info(f"Batch job completed: {job.title} ({job.success_rate:.1f}% success)")
+        except Exception as e:
+            logger.error(f"Error in batch job completion callback: {e}")
+    
+    def _on_batch_item_completed(self, job_id: str, item_id: str, item):
+        """Callback for batch item completion"""
+        try:
+            logger.debug(f"Batch item completed: {item.manga_title}")
+        except Exception as e:
+            logger.error(f"Error in batch item completion callback: {e}")
+    
+    def _update_batch_status(self):
+        """Update batch status properties"""
+        try:
+            status = self.batch_service.get_queue_status()
+            
+            old_queue_size = self._batch_queue_size
+            old_active_jobs = self._batch_active_jobs
+            
+            self._batch_queue_size = status.get("queue_size", 0)
+            self._batch_active_jobs = status.get("running_jobs", 0)
+            
+            # Emit signals if values changed
+            if old_queue_size != self._batch_queue_size or old_active_jobs != self._batch_active_jobs:
+                self.performanceChanged.emit()
+            
+        except Exception as e:
+            logger.error(f"Error updating batch status: {e}")
+
+    async def shutdown(self) -> None:
+        """Gracefully stop background activity and close async services."""
+        if self._is_shutting_down:
+            logger.debug("Backend shutdown already in progress; skipping duplicate request")
+            return
+
+        logger.info("Backend shutdown started")
+        self._is_shutting_down = True
+        try:
+            if self._memory_timer is not None:
+                self._memory_timer.stop()
+                self._memory_timer.deleteLater()
+                self._memory_timer = None
+
+            if self.scan_service.is_scanning:
+                try:
+                    await self.scan_service.cancel_scan()
+                except Exception as exc:
+                    logger.warning(f"Error cancelling active scan during shutdown: {exc}")
+
+            if self._current_scan_task and not self._current_scan_task.done():
+                self._current_scan_task.cancel()
+                await asyncio.gather(self._current_scan_task, return_exceptions=True)
+            self._current_scan_task = None
+
+            try:
+                await self.batch_service.stop_service()
+            except Exception as exc:
+                logger.warning(f"Error stopping batch service during shutdown: {exc}")
+
+            try:
+                monitor_task = self._current_upload_monitor_task
+                if monitor_task and not monitor_task.done():
+                    monitor_task.cancel()
+                    await asyncio.gather(monitor_task, return_exceptions=True)
+                self._current_upload_monitor_task = None
+                self._current_job_id = None
+
+                await self.upload_queue.stop()
+            except Exception as exc:
+                logger.warning(f"Error stopping upload queue during shutdown: {exc}")
+
+            background_tasks = [task for task in self._background_tasks if not task.done()]
+            for task in background_tasks:
+                task.cancel()
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
+            github_service = self.github_manager.github_service
+            if github_service is not None:
+                try:
+                    await github_service.close()
+                except Exception as exc:
+                    logger.warning(f"Error closing GitHub service during shutdown: {exc}")
+        finally:
+            self._is_shutting_down = False
+            logger.info("Backend shutdown finished")
+    
     # Legacy methods for compatibility
     @Slot(list)
     def uploadSelectedChapters(self, chapter_indices: List[int]):
         """Legacy method - use startUpload instead"""
-        logger.info(f"Upload requested for {len(chapter_indices)} chapters")
-        self.processingStarted.emit()
+        logger.info(f"Legacy upload requested for {len(chapter_indices)} chapters")
+        self.manga_manager.set_selected_chapters(chapter_indices)
+        self.startUpload()
     
     @Slot()
     def stopUpload(self):
         """Stop current upload"""
         logger.info("Upload stop requested")
+        task = self._schedule_task(self._stop_upload_async())
+        if task is None:
+            self.error.emit("Erro ao interromper upload")
+
+    async def _stop_upload_async(self) -> None:
+        """Stop current upload queue processing and reset upload state."""
+        try:
+            monitor_task = self._current_upload_monitor_task
+            if monitor_task and not monitor_task.done():
+                monitor_task.cancel()
+                await asyncio.gather(monitor_task, return_exceptions=True)
+            self._current_upload_monitor_task = None
+
+            await self.upload_queue.stop()
+            await self.upload_queue.start()
+
+            self._current_job_id = None
+            self._upload_progress = 0.0
+            self.progressChanged.emit(0.0)
+            logger.info("Upload queue restarted after stop request")
+        except Exception as exc:
+            logger.error(f"Error stopping upload: {exc}")
+            self.error.emit(f"Erro ao interromper upload: {exc}")
+        finally:
+            self._emit_processing_finished()
     
     @Slot(str)
     def filterMangaList(self, search_text: str):
@@ -1390,10 +2596,21 @@ class Backend(QObject):
     @Slot(str)
     def testImgboxCookie(self, cookie):
         """Test Imgbox cookie by attempting a small upload"""
+        cookie_value = str(cookie or "").strip()
+
         def run_test():
             try:
                 import tempfile
                 from pathlib import Path
+
+                if not cookie_value:
+                    self.cookieTestResult.emit("error", "❌ Cookie vazio")
+                    return
+
+                # Basic sanity check to avoid obvious false positives.
+                if "=" not in cookie_value or len(cookie_value) < 10:
+                    self.cookieTestResult.emit("error", "❌ Cookie inválido (formato inesperado)")
+                    return
                 
                 # Create a minimal test file
                 with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as temp_file:
@@ -1402,7 +2619,9 @@ class Backend(QObject):
                 
                 # Test basic functionality
                 try:
-                    import pyimgbox
+                    import importlib.util
+                    if importlib.util.find_spec("pyimgbox") is None:
+                        raise ImportError("pyimgbox not installed")
                     self.cookieTestResult.emit("success", "✅ Cookie aceito! pyimgbox funcionando corretamente")
                 except ImportError:
                     self.cookieTestResult.emit("error", "❌ pyimgbox não está instalado")
@@ -1412,7 +2631,7 @@ class Backend(QObject):
                 # Clean up
                 try:
                     temp_path.unlink()
-                except:
+                except OSError:
                     pass
                     
             except Exception as e:
@@ -1429,7 +2648,7 @@ class Backend(QObject):
             
         try:
             from pathlib import Path
-            from src.utils.sanitizer import sanitize_filename
+            from utils.sanitizer import sanitize_filename
             
             manga_title = self.manga_manager.current_manga.title
             output_folder = Path(self.config_manager.config.output_folder)

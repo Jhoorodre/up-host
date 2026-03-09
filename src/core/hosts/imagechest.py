@@ -1,6 +1,6 @@
 import aiohttp
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, cast
 from loguru import logger
 
 from .base import BaseHost
@@ -29,41 +29,44 @@ class ImageChestHost(BaseHost):
             headers = {
                 'Authorization': f'Bearer {self.api_key}'
             }
-            
-            data = aiohttp.FormData()
-            data.add_field('image', 
-                          open(filepath, 'rb'), 
-                          filename=filepath.name,
-                          content_type='image/*')
-            
+
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, data=data, headers=headers) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get('success'):
-                            image_url = result['data']['url']
-                            logger.debug(f"ImageChest upload successful: {image_url}")
-                            return UploadResult(
-                                filename=filepath.name,
-                                url=image_url,
-                                success=True
-                            )
+                with open(filepath, 'rb') as file_handle:
+                    data = aiohttp.FormData()
+                    data.add_field(
+                        'image',
+                        file_handle,
+                        filename=filepath.name,
+                        content_type='image/*',
+                    )
+
+                    async with session.post(self.api_url, data=data, headers=headers) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            if result.get('success'):
+                                image_url = result['data']['url']
+                                logger.debug(f"ImageChest upload successful: {image_url}")
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url=image_url,
+                                    success=True
+                                )
+                            else:
+                                error_msg = result.get('message', 'Unknown error')
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url="",
+                                    success=False,
+                                    error=f"ImageChest API error: {error_msg}"
+                                )
                         else:
-                            error_msg = result.get('message', 'Unknown error')
+                            error_text = await response.text()
                             return UploadResult(
                                 filename=filepath.name,
                                 url="",
                                 success=False,
-                                error=f"ImageChest API error: {error_msg}"
+                                error=f"HTTP {response.status}: {error_text}"
                             )
-                    else:
-                        error_text = await response.text()
-                        return UploadResult(
-                            filename=filepath.name,
-                            url="",
-                            success=False,
-                            error=f"HTTP {response.status}: {error_text}"
-                        )
                         
         except Exception as e:
             logger.error(f"ImageChest upload failed for {filepath.name}: {e}")
@@ -102,7 +105,7 @@ class ImageChestHost(BaseHost):
                         if result.get('success'):
                             album_url = result['data']['url']
                             logger.debug(f"ImageChest album created: {album_url}")
-                            return album_url
+                            return cast(str, album_url)
         except Exception as e:
             logger.error(f"ImageChest album creation failed: {e}")
         

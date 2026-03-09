@@ -3,10 +3,10 @@ from typing import List, Dict, Any
 
 
 class MangaListModel(QAbstractListModel):
-    TitleRole = Qt.UserRole + 1
-    PathRole = Qt.UserRole + 2
-    ChapterCountRole = Qt.UserRole + 3
-    CoverUrlRole = Qt.UserRole + 4
+    TitleRole = Qt.ItemDataRole.UserRole + 1
+    PathRole = Qt.ItemDataRole.UserRole + 2
+    ChapterCountRole = Qt.ItemDataRole.UserRole + 3
+    CoverUrlRole = Qt.ItemDataRole.UserRole + 4
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -15,13 +15,13 @@ class MangaListModel(QAbstractListModel):
     def rowCount(self, parent=QModelIndex()):
         return len(self._mangas)
     
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._mangas):
             return None
         
         manga = self._mangas[index.row()]
         
-        if role == Qt.DisplayRole or role == self.TitleRole:
+        if role == Qt.ItemDataRole.DisplayRole or role == self.TitleRole:
             return manga["title"]
         elif role == self.PathRole:
             return manga["path"]
@@ -49,13 +49,46 @@ class MangaListModel(QAbstractListModel):
         self.beginResetModel()
         self._mangas = []
         self.endResetModel()
+    
+    def add_manga(self, manga):
+        """Add a single manga to the model incrementally"""
+        # Convert Manga object to dict format expected by the model
+        # FIXED: Properly handle chapter count calculation
+        chapter_count = 0
+        if hasattr(manga, 'chapters') and manga.chapters is not None:
+            chapter_count = len(manga.chapters)
+        elif hasattr(manga, '_chapter_count'):
+            chapter_count = manga._chapter_count
+        
+        manga_dict = {
+            "title": manga.title,
+            "path": str(manga.path),
+            "chapterCount": chapter_count,
+            "coverUrl": getattr(manga, 'cover_url', "") or ""
+        }
+        
+        # Check if manga already exists (avoid duplicates)
+        for existing in self._mangas:
+            if existing["title"] == manga_dict["title"]:
+                # Update existing instead of adding duplicate
+                existing.update(manga_dict)
+                # Find index and emit dataChanged
+                index = self._mangas.index(existing)
+                model_index = self.index(index, 0)
+                self.dataChanged.emit(model_index, model_index)
+                return
+        
+        # Add new manga
+        self.beginInsertRows(QModelIndex(), len(self._mangas), len(self._mangas))
+        self._mangas.append(manga_dict)
+        self.endInsertRows()
 
 
 class ChapterListModel(QAbstractListModel):
-    NameRole = Qt.UserRole + 1
-    PathRole = Qt.UserRole + 2
-    ImageCountRole = Qt.UserRole + 3
-    SelectedRole = Qt.UserRole + 4
+    NameRole = Qt.ItemDataRole.UserRole + 1
+    PathRole = Qt.ItemDataRole.UserRole + 2
+    ImageCountRole = Qt.ItemDataRole.UserRole + 3
+    SelectedRole = Qt.ItemDataRole.UserRole + 4
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,13 +98,13 @@ class ChapterListModel(QAbstractListModel):
     def rowCount(self, parent=QModelIndex()):
         return len(self._chapters)
     
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._chapters):
             return None
         
         chapter = self._chapters[index.row()]
         
-        if role == Qt.DisplayRole or role == self.NameRole:
+        if role == Qt.ItemDataRole.DisplayRole or role == self.NameRole:
             return chapter["name"]
         elif role == self.PathRole:
             return chapter["path"]
@@ -148,8 +181,8 @@ class ChapterListModel(QAbstractListModel):
 
 
 class GitHubFolderListModel(QAbstractListModel):
-    NameRole = Qt.UserRole + 1
-    PathRole = Qt.UserRole + 2
+    NameRole = Qt.ItemDataRole.UserRole + 1
+    PathRole = Qt.ItemDataRole.UserRole + 2
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -158,13 +191,13 @@ class GitHubFolderListModel(QAbstractListModel):
     def rowCount(self, parent=QModelIndex()):
         return len(self._folders)
     
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._folders):
             return None
         
         folder = self._folders[index.row()]
         
-        if role == Qt.DisplayRole or role == self.NameRole:
+        if role == Qt.ItemDataRole.DisplayRole or role == self.NameRole:
             return folder["name"]
         elif role == self.PathRole:
             return folder["path"]

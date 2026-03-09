@@ -1,12 +1,10 @@
-import asyncio
-import time
 from pathlib import Path
-from typing import List, Dict, Optional
-import json
+import time
+from typing import List, Dict, Optional, Any, cast
 from loguru import logger
 
 from core.models import Manga, Chapter, ChapterUploadResult
-from core.hosts import BaseHost, CatboxHost
+from core.hosts import BaseHost
 from utils.helpers import sanitize_filename
 from utils.json_updater import JSONUpdater
 
@@ -21,8 +19,12 @@ class MangaUploaderService:
     
     def register_host(self, name: str, host: BaseHost):
         """Register a new host service"""
+        previous = self.hosts.get(name)
         self.hosts[name] = host
-        logger.info(f"Registered host: {name}")
+        if previous is None:
+            logger.info(f"Registered host: {name}")
+        elif previous is not host:
+            logger.debug(f"Re-registered host instance: {name}")
     
     def set_host(self, name: str) -> bool:
         """Set the active host for uploads"""
@@ -65,7 +67,7 @@ class MangaUploaderService:
         return results
     
     async def generate_metadata(self, manga: Manga, upload_results: Dict[str, ChapterUploadResult], 
-                              output_path: Path, update_mode: str = "add", custom_metadata: Dict = None) -> Path:
+                              output_path: Path, update_mode: str = "add", custom_metadata: Optional[Dict[str, Any]] = None) -> Path:
         """
         Generate JSON metadata for uploaded manga with merge support
         
@@ -91,16 +93,16 @@ class MangaUploaderService:
             # Get group name from existing JSON or custom metadata
             group_name = "default"
             if custom_metadata and custom_metadata.get("group"):
-                group_name = custom_metadata.get("group")
+                group_name = str(custom_metadata.get("group"))
             elif existing_data := JSONUpdater.load_existing_json(final_output_path):
                 # Use existing group name from any chapter
                 for ch in existing_data.get('chapters', {}).values():
                     if 'groups' in ch and ch['groups']:
-                        group_name = list(ch['groups'].keys())[0]
+                        first_group = next(iter(ch['groups'].keys()), "default")
+                        group_name = cast(str, first_group)
                         break
             
             # Create Unix timestamp with exact upload time
-            import time
             exact_timestamp = str(int(time.time()))
             
             new_chapters_data[f"{idx:03d}"] = {

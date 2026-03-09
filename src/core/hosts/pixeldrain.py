@@ -21,41 +21,44 @@ class PixeldrainHost(BaseHost):
             headers = {}
             if self.api_key:
                 headers['Authorization'] = f'Basic {self.api_key}'
-            
-            data = aiohttp.FormData()
-            data.add_field('file', 
-                          open(filepath, 'rb'), 
-                          filename=filepath.name)
-            
+
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, data=data, headers=headers) as response:
-                    if response.status == 201:  # Pixeldrain returns 201 for successful uploads
-                        result = await response.json()
-                        file_id = result.get('id')
-                        if file_id:
-                            # Pixeldrain direct link format
-                            image_url = f"https://pixeldrain.com/api/file/{file_id}"
-                            logger.debug(f"Pixeldrain upload successful: {image_url}")
-                            return UploadResult(
-                                filename=filepath.name,
-                                url=image_url,
-                                success=True
-                            )
+                with open(filepath, 'rb') as file_handle:
+                    data = aiohttp.FormData()
+                    data.add_field(
+                        'file',
+                        file_handle,
+                        filename=filepath.name,
+                    )
+
+                    async with session.post(self.api_url, data=data, headers=headers) as response:
+                        if response.status == 201:  # Pixeldrain returns 201 for successful uploads
+                            result = await response.json()
+                            file_id = result.get('id')
+                            if file_id:
+                                # Pixeldrain direct link format
+                                image_url = f"https://pixeldrain.com/api/file/{file_id}"
+                                logger.debug(f"Pixeldrain upload successful: {image_url}")
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url=image_url,
+                                    success=True
+                                )
+                            else:
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url="",
+                                    success=False,
+                                    error="No file ID in response"
+                                )
                         else:
+                            error_text = await response.text()
                             return UploadResult(
                                 filename=filepath.name,
                                 url="",
                                 success=False,
-                                error="No file ID in response"
+                                error=f"HTTP {response.status}: {error_text}"
                             )
-                    else:
-                        error_text = await response.text()
-                        return UploadResult(
-                            filename=filepath.name,
-                            url="",
-                            success=False,
-                            error=f"HTTP {response.status}: {error_text}"
-                        )
                         
         except Exception as e:
             logger.error(f"Pixeldrain upload failed for {filepath.name}: {e}")

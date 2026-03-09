@@ -2,8 +2,10 @@ import httpx
 from pathlib import Path
 from typing import Optional, List
 import asyncio
+import time
 from tenacity import retry, stop_after_attempt, wait_exponential
 import base64
+from loguru import logger
 
 from .base import BaseHost
 from core.models import UploadResult
@@ -34,14 +36,14 @@ class ImgurHost(BaseHost):
         else:
             raise ValueError("Imgur requires client_id or access_token")
     
-    def _update_rate_limits(self, headers: dict):
+    def _update_rate_limits(self, headers):
         """Update rate limit info from response headers"""
         try:
             self.user_remaining = int(headers.get('X-RateLimit-UserRemaining', 0))
             self.user_reset = int(headers.get('X-RateLimit-UserReset', 0))
             self.client_remaining = int(headers.get('X-RateLimit-ClientRemaining', 0))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            logger.debug(f"Could not parse Imgur rate-limit headers: {exc}")
     
     @retry(
         stop=stop_after_attempt(3),
@@ -58,8 +60,8 @@ class ImgurHost(BaseHost):
             )
         
         # Check rate limits
-        if self.client_remaining is not None and self.client_remaining < 5:
-            wait_time = max(10, self.user_reset - asyncio.get_event_loop().time())
+        if self.client_remaining is not None and self.client_remaining < 5 and self.user_reset is not None:
+            wait_time = max(10, self.user_reset - time.time())
             await asyncio.sleep(wait_time)
         
         try:
@@ -134,8 +136,8 @@ class ImgurHost(BaseHost):
                 album_id = data['data']['id']
                 return f"https://imgur.com/a/{album_id}"
             
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Imgur album creation failed: {exc}")
         
         return None
     

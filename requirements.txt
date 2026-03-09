@@ -13,6 +13,9 @@ PySide6>=6.5.0         # Qt6 bindings for Python
 PyYAML>=6.0            # YAML configuration support
 Pillow>=10.0.0         # Image processing (WebP to JPG conversion)
 python-dotenv>=1.0.0   # Environment variables support
+psutil>=5.9.0          # System and process monitoring
+watchdog>=3.0.0        # File system monitoring
+platformdirs>=3.0.0    # Platform-specific directories
 
 # Networking and Reliability
 tenacity>=8.2.0        # Retry mechanisms with backoff

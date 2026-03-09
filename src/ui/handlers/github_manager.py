@@ -1,6 +1,7 @@
 """GitHub integration management handler for UI backend"""
 
 import asyncio
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 from PySide6.QtCore import QObject, Signal, Property, Slot
 from core.config import ConfigManager
@@ -23,20 +24,51 @@ class GitHubManager(QObject):
         self.config_manager = config_manager
         self.github_service: Optional[GitHubService] = None
         self._github_folders = ["metadata"]  # CRITICAL: Store folders in GitHubManager
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._refresh_in_progress = False
         self._init_github_service()
+
+    def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Finalize tracked background tasks and log failures explicitly."""
+        self._background_tasks.discard(task)
+
+        if task.cancelled():
+            return
+
+        try:
+            task.result()
+        except Exception as exc:
+            logger.error(f"GitHubManager background task failed: {exc}")
+
+    def _schedule_task(self, coro: Any) -> bool:
+        """Schedule coroutine on running or startup-configured loop with tracking."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                if asyncio.iscoroutine(coro):
+                    coro.close()
+                return False
+
+            if loop.is_closed():
+                if asyncio.iscoroutine(coro):
+                    coro.close()
+                return False
+
+            logger.debug("Scheduling GitHub task on configured event loop before run_forever")
+
+        task = loop.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+        return True
     
     def __del__(self):
         """Cleanup when manager is destroyed"""
-        if self.github_service:
-            # Schedule cleanup in the event loop if available
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.github_service.close())
-            except RuntimeError:
-                # No event loop available, client will be cleaned up by GC
-                pass
+        # Avoid async scheduling from destructor context.
+        # Cleanup is handled by explicit shutdown lifecycle in Backend.
+        return
     
     # GitHub Configuration Properties
     @Property(bool, notify=githubConfigChanged)
@@ -113,13 +145,9 @@ class GitHubManager(QObject):
         try:
             # Close existing service if any
             if self.github_service:
-                import asyncio
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(self.github_service.close())
-                except RuntimeError:
-                    pass  # No event loop available
+                scheduled = self._schedule_task(self.github_service.close())
+                if not scheduled:
+                    logger.debug("Could not schedule GitHub service close (no running event loop)")
             
             github_config = self.config_manager.config.github
             token = github_config.get("token", "").strip()
@@ -252,15 +280,34 @@ class GitHubManager(QObject):
         """Test GitHub connection"""
         try:
             if not self.github_service:
+                self.githubStatusChanged.emit("GitHub not configured")
                 return False
-            
-            # TODO: Implement actual async connection test in a proper async context
+
+            self.githubStatusChanged.emit("Testing GitHub connection...")
+            scheduled = self._schedule_task(self._test_github_connection_async())
+            if not scheduled:
+                logger.warning("No running event loop for async GitHub connection test")
+                return False
             return True
         except Exception as e:
             logger.error(f"Error testing GitHub connection: {e}")
+            self.githubStatusChanged.emit(f"GitHub connection test error: {e}")
             return False
+
+    async def _test_github_connection_async(self) -> None:
+        """Run GitHub connection validation and emit detailed status."""
+        if not self.github_service:
+            self.githubStatusChanged.emit("GitHub not configured")
+            return
+
+        ok, message = await self.github_service.validate_connection()
+        self.githubStatusChanged.emit(message)
+        if ok:
+            logger.info(message)
+        else:
+            logger.warning(message)
     
-    def upload_metadata(self, file_path: str, content: str, commit_message: str = None) -> bool:
+    def upload_metadata(self, file_path: str, content: str, commit_message: Optional[str] = None) -> bool:
         """Upload metadata file to GitHub"""
         try:
             if not self.github_service:
@@ -268,18 +315,20 @@ class GitHubManager(QObject):
                 return False
             
             if not commit_message:
-                commit_message = self.config_manager.config.github.commit_message
+                commit_message = self.config_manager.config.github.get(
+                    "commit_message", "Update manga metadata"
+                )
             
             # Run async upload in current event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Use ensure_future for running event loop
-                future = asyncio.ensure_future(self._async_upload_metadata(file_path, content, commit_message))
+            scheduled = self._schedule_task(
+                self._async_upload_metadata(file_path, content, commit_message)
+            )
+            if scheduled:
                 # Note: This returns immediately, actual upload happens async
                 return True
-            else:
-                # Sync execution if no loop running
-                return loop.run_until_complete(self._async_upload_metadata(file_path, content, commit_message))
+
+            # Sync execution if no loop running
+            return asyncio.run(self._async_upload_metadata(file_path, content, commit_message))
             
         except Exception as e:
             logger.error(f"Error uploading metadata to GitHub: {e}")
@@ -359,19 +408,27 @@ class GitHubManager(QObject):
     
     async def _async_upload_metadata(self, file_path: str, content: str, commit_message: str) -> bool:
         """Async method to upload metadata to GitHub"""
+        temp_file_path: Optional[Path] = None
         try:
             if not self.github_service:
                 logger.error("GitHub service not available")
                 return False
             
-            from pathlib import Path
+            import tempfile
             
             # Create a temporary file if content is provided instead of file_path
             if content and not Path(file_path).exists():
-                temp_file = Path("/tmp") / f"temp_{Path(file_path).name}"
-                with open(temp_file, 'w', encoding='utf-8') as f:
+                temp_handle = tempfile.NamedTemporaryFile(
+                    mode='w',
+                    suffix=Path(file_path).suffix or '.json',
+                    prefix='github_meta_',
+                    delete=False,
+                    encoding='utf-8',
+                )
+                with temp_handle as f:
                     f.write(content)
-                file_path = str(temp_file)
+                temp_file_path = Path(temp_handle.name)
+                file_path = str(temp_file_path)
             
             # Determine remote path
             github_folder = self.config_manager.config.github.get("folder", "")
@@ -399,16 +456,33 @@ class GitHubManager(QObject):
             logger.error(error_msg)
             self.githubUploadFailed.emit(Path(file_path).name, error_msg)
             return False
+        finally:
+            if temp_file_path and temp_file_path.exists():
+                try:
+                    temp_file_path.unlink()
+                except Exception as cleanup_exc:
+                    logger.debug(f"Could not remove temporary GitHub metadata file: {cleanup_exc}")
     
     @Slot()
     def refreshGitHubFolders(self):
         """Load all folders from GitHub repository"""
-        if not self.is_github_configured():
+        if not self.github_service:
+            self._init_github_service()
+        if not self.github_service:
             logger.warning("GitHub not configured, cannot refresh folders")
             return
+
+        if self._refresh_in_progress:
+            logger.debug("GitHub folder refresh already in progress; skipping duplicate trigger")
+            return
+
+        self._refresh_in_progress = True
         
         # Start async folder loading
-        asyncio.ensure_future(self._refresh_github_folders())
+        scheduled = self._schedule_task(self._refresh_github_folders())
+        if not scheduled:
+            self._refresh_in_progress = False
+            logger.warning("No running event loop to refresh GitHub folders asynchronously")
     
     async def _refresh_github_folders(self):
         """Load all folders from GitHub repository recursively"""
@@ -416,8 +490,10 @@ class GitHubManager(QObject):
             if not self.github_service:
                 logger.error("GitHub service not available")
                 # CRITICAL: Emit fallback folders
-                self._github_folders = ["", "metadata"]
-                self.githubFoldersChanged.emit(self._github_folders)
+                fallback = ["", "metadata"]
+                if self._github_folders != fallback:
+                    self._github_folders = fallback
+                    self.githubFoldersChanged.emit(self._github_folders)
                 return
             
             logger.debug("Loading all GitHub folders recursively")
@@ -434,15 +510,22 @@ class GitHubManager(QObject):
                     unique_folders.append(folder)
             
             # CRITICAL: Store folders and emit signal with data
-            self._github_folders = unique_folders
-            self.githubFoldersChanged.emit(self._github_folders)
-            logger.debug(f"Loaded {len(unique_folders)} GitHub folder options: {unique_folders[:10]}...")
+            if self._github_folders != unique_folders:
+                self._github_folders = unique_folders
+                self.githubFoldersChanged.emit(self._github_folders)
+                logger.debug(f"Loaded {len(unique_folders)} GitHub folder options: {unique_folders[:10]}...")
+            else:
+                logger.debug("GitHub folder list unchanged; skipping duplicate emit")
             
         except Exception as e:
             logger.error(f"Error loading GitHub folders: {e}")
             # CRITICAL: Emit fallback folders on error
-            self._github_folders = ["", "metadata"]
-            self.githubFoldersChanged.emit(self._github_folders)
+            fallback = ["", "metadata"]
+            if self._github_folders != fallback:
+                self._github_folders = fallback
+                self.githubFoldersChanged.emit(self._github_folders)
+        finally:
+            self._refresh_in_progress = False
     
     async def _get_all_folders_recursive(self, github_service, path: str = "", max_depth: int = 3, current_depth: int = 0):
         """Recursively get all folders in the repository"""

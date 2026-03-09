@@ -2,9 +2,9 @@ import sys
 import asyncio
 from pathlib import Path
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
+from PySide6.QtQml import QQmlApplicationEngine
 from loguru import logger
-import qasync
+import qasync  # type: ignore[import-untyped]
 
 # Add src to path
 # sys.path.insert(0, str(Path(__file__).parent))
@@ -46,7 +46,7 @@ def main():
     backend = Backend()
     
     # Initialize async services now that loop is ready
-    asyncio.ensure_future(backend.upload_queue.start())
+    loop.create_task(backend.upload_queue.start())
     
     # Register backend
     engine.rootContext().setContextProperty("backend", backend)
@@ -64,44 +64,34 @@ def main():
         logger.error("Falha ao carregar QML")
         sys.exit(1)
     
-    # Run application with proper cleanup
-    try:
-        with loop:
-            loop.run_forever()
-    except KeyboardInterrupt:
-        logger.info("Shutdown requested")
-    finally:
-        # Cleanup async services
+    # Run application with proper cleanup while loop is still active
+    with loop:
         try:
-            # Cancel all pending tasks first
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                if not task.done():
-                    task.cancel()
-            
-            # Wait for backend shutdown
-            if pending:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested")
+        finally:
+            try:
                 try:
-                    loop.run_until_complete(asyncio.wait_for(
-                        backend.shutdown(), timeout=3.0
-                    ))
+                    loop.run_until_complete(asyncio.wait_for(backend.shutdown(), timeout=3.0))
                 except asyncio.TimeoutError:
                     logger.warning("Backend shutdown timed out")
-            
-            # Wait for remaining tasks to cleanup
-            if pending:
-                try:
-                    loop.run_until_complete(asyncio.wait_for(
-                        asyncio.gather(*pending, return_exceptions=True), 
-                        timeout=2.0
-                    ))
-                except asyncio.TimeoutError:
-                    logger.warning("Some tasks didn't complete during shutdown")
-                    
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-        
-        sys.exit(0)
+
+                pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+                for task in pending:
+                    task.cancel()
+
+                if pending:
+                    try:
+                        loop.run_until_complete(
+                            asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=2.0)
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Some tasks didn't complete during shutdown")
+            except Exception as e:
+                logger.error(f"Error during cleanup: {e}")
+
+    sys.exit(0)
 
 
 if __name__ == "__main__":

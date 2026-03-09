@@ -1,6 +1,6 @@
 import aiohttp
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, cast
 from loguru import logger
 
 from .base import BaseHost
@@ -48,7 +48,7 @@ class GofileHost(BaseHost):
                             direct_link = data.get('directLink')
                             if direct_link:
                                 logger.debug(f"Found Gofile direct link: {direct_link}")
-                                return direct_link
+                                return cast(str, direct_link)
                             
                             # Fallback: construct from file info
                             server = data.get('server', 'store1')
@@ -65,7 +65,7 @@ class GofileHost(BaseHost):
                                 direct_link = content_info.get('directLink')
                                 if direct_link:
                                     logger.debug(f"Found Gofile direct link in folder: {direct_link}")
-                                    return direct_link
+                                    return cast(str, direct_link)
                                 
                                 # Construct direct link
                                 server = content_info.get('server', 'store1')
@@ -94,46 +94,49 @@ class GofileHost(BaseHost):
         """Upload image to Gofile"""
         try:
             upload_url = await self._get_upload_server()
-            
-            data = aiohttp.FormData()
-            data.add_field('file', 
-                          open(filepath, 'rb'), 
-                          filename=filepath.name)
-            
+
             async with aiohttp.ClientSession() as session:
-                async with session.post(upload_url, data=data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get('status') == 'ok':
-                            file_code = result['data']['code']
-                            download_page = result['data']['downloadPage']
-                            
-                            # Try to get direct link from file info
-                            direct_url = await self._get_direct_link(session, file_code)
-                            final_url = direct_url if direct_url else download_page
-                            
-                            logger.debug(f"Gofile upload successful: {final_url}")
-                            return UploadResult(
-                                filename=filepath.name,
-                                url=final_url,
-                                success=True
-                            )
+                with open(filepath, 'rb') as file_handle:
+                    data = aiohttp.FormData()
+                    data.add_field(
+                        'file',
+                        file_handle,
+                        filename=filepath.name,
+                    )
+
+                    async with session.post(upload_url, data=data) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            if result.get('status') == 'ok':
+                                file_code = result['data']['code']
+                                download_page = result['data']['downloadPage']
+
+                                # Try to get direct link from file info
+                                direct_url = await self._get_direct_link(session, file_code)
+                                final_url = direct_url if direct_url else download_page
+
+                                logger.debug(f"Gofile upload successful: {final_url}")
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url=final_url,
+                                    success=True
+                                )
+                            else:
+                                error_msg = result.get('error', 'Unknown error')
+                                return UploadResult(
+                                    filename=filepath.name,
+                                    url="",
+                                    success=False,
+                                    error=f"Gofile API error: {error_msg}"
+                                )
                         else:
-                            error_msg = result.get('error', 'Unknown error')
+                            error_text = await response.text()
                             return UploadResult(
                                 filename=filepath.name,
                                 url="",
                                 success=False,
-                                error=f"Gofile API error: {error_msg}"
+                                error=f"HTTP {response.status}: {error_text}"
                             )
-                    else:
-                        error_text = await response.text()
-                        return UploadResult(
-                            filename=filepath.name,
-                            url="",
-                            success=False,
-                            error=f"HTTP {response.status}: {error_text}"
-                        )
                         
         except Exception as e:
             logger.error(f"Gofile upload failed for {filepath.name}: {e}")

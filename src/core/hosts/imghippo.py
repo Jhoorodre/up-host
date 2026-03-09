@@ -1,7 +1,6 @@
 import httpx
 from pathlib import Path
-from typing import Optional, List
-import asyncio
+from typing import Optional, List, cast
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from .base import BaseHost
@@ -101,7 +100,8 @@ class ImgHippoHost(BaseHost):
             response.raise_for_status()
             
             result = response.json()
-            return result.get('status') == 200
+            status = cast(Optional[int], result.get('status'))
+            return status == 200
             
         except Exception:
             return False

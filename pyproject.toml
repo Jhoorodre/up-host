@@ -69,7 +69,24 @@ asyncio_mode = "auto"
 line-length = 100
 target-version = ['py38']
 
+[tool.ruff]
+extend-exclude = ["src/ui/backend_original.py"]
+
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
+mypy_path = ["src"]
+explicit_package_bases = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["pyimgbox"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["qasync"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["ui.backend_original", "src.ui.backend_original"]
+ignore_errors = true

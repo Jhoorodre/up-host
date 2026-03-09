@@ -28,15 +28,25 @@ ApplicationWindow {
     property var currentManga: null
     property var selectedChapters: []
     property bool isProcessing: false
+    property bool isLoadingLibrary: false
     
     Component.onCompleted: {
         backend.loadConfig()
+        // Load library immediately so covers/cards are populated without opening settings.
         backend.refreshMangaList()
     }
     
     // Connect cookie test result signal
     Connections {
         target: backend
+        function onProcessingStarted() {
+            isProcessing = true
+        }
+
+        function onProcessingFinished() {
+            isProcessing = false
+        }
+
         function onCookieTestResult(resultType, message) {
             testCookieResult.text = message
             if (resultType === "success") {
@@ -51,6 +61,12 @@ ApplicationWindow {
             console.log("🔄 MangaInfoChanged signal received - GitHub button will refresh automatically")
             console.log("📊 Current state: hasJson=" + backend.currentMangaHasJson + ", isProcessing=" + isProcessing)
             // QML property binding will automatically refresh the githubBtnEnabled property
+        }
+        
+        // Stop loading animation when library loading finishes
+        function onLibraryLoadingFinished() {
+            isLoadingLibrary = false
+            console.log("📚 Library loading completed")
         }
     }
     
@@ -303,6 +319,110 @@ ApplicationWindow {
                         leftPadding: 12
                         rightPadding: 12
                         onTextChanged: backend.filterMangaList(text)
+                    }
+                }
+                
+                Rectangle {
+                    id: progressiveScanButton
+                    Layout.fillWidth: true
+                    height: isLoadingLibrary ? 48 : 32
+                    color: scanButtonHovered ? colorSecondary : colorSurface
+                    border.color: isLoadingLibrary ? colorSuccess : colorTertiary
+                    border.width: 1
+                    radius: 8
+                    
+                    property bool scanButtonHovered: false
+                    
+                    Behavior on height { NumberAnimation { duration: 200 } }
+                    Behavior on border.color { ColorAnimation { duration: 200 } }
+                    
+                    Column {
+                        anchors.centerIn: parent
+                        spacing: 4
+                        
+                        RowLayout {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: 8
+                            
+                            Label {
+                                text: {
+                                    if (!isLoadingLibrary) return "🔄"
+                                    if (backend.scanProgress < 100) return "⟳"
+                                    return "✓"
+                                }
+                                font.pixelSize: 12
+                                color: {
+                                    if (isLoadingLibrary && backend.scanProgress >= 100) return colorSuccess
+                                    if (progressiveScanButton.scanButtonHovered) return "white"
+                                    return colorTertiary
+                                }
+                                
+                                SequentialAnimation on rotation {
+                                    running: isLoadingLibrary && backend.scanProgress < 100
+                                    loops: Animation.Infinite
+                                    NumberAnimation { from: 0; to: 360; duration: 1000 }
+                                }
+                            }
+                            
+                            Label {
+                                text: {
+                                    if (!isLoadingLibrary) return "INICIAR VARREDURA"
+                                    if (backend.scanProgress < 100) return "ESCANEANDO " + backend.scanProgress + "%"
+                                    return "✓ COMPLETO"
+                                }
+                                font.pixelSize: 10
+                                font.weight: Font.Medium
+                                color: {
+                                    if (isLoadingLibrary && backend.scanProgress >= 100) return colorSuccess
+                                    if (progressiveScanButton.scanButtonHovered) return "white"
+                                    return colorTertiary
+                                }
+                            }
+                        }
+                        
+                        // Progress bar (only visible during scanning)
+                        Rectangle {
+                            width: 200
+                            height: 4
+                            radius: 2
+                            color: colorPrimary
+                            border.color: colorTertiary
+                            border.width: 1
+                            visible: isLoadingLibrary && backend.scanProgress < 100
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            
+                            Rectangle {
+                                height: parent.height - 2
+                                width: (parent.width - 2) * (backend.scanProgress / 100)
+                                radius: 2
+                                color: colorSecondary
+                                anchors.left: parent.left
+                                anchors.leftMargin: 1
+                                anchors.verticalCenter: parent.verticalCenter
+                                
+                                Behavior on width { NumberAnimation { duration: 300 } }
+                            }
+                        }
+                    }
+                    
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: true
+                        onEntered: progressiveScanButton.scanButtonHovered = true
+                        onExited: progressiveScanButton.scanButtonHovered = false
+                        cursorShape: isLoadingLibrary ? Qt.ForbiddenCursor : Qt.PointingHandCursor
+                        
+                        // Handle both left and right clicks
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: function(mouse) {
+                            if (mouse.button === Qt.RightButton && isLoadingLibrary) {
+                                backend.cancelProgressiveScan()
+                            } else if (mouse.button === Qt.LeftButton && !isLoadingLibrary) {
+                                var started = backend.startProgressiveScan()
+                                isLoadingLibrary = started
+                            }
+                        }
                     }
                 }
                 
@@ -1094,6 +1214,64 @@ ApplicationWindow {
                                 // No manual intervention needed - QML handles this automatically
                             }
                             
+                            // Batch Button
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 48
+                                radius: 8
+                                color: batchBtnHovered ? "#ff6b35" : colorSurface
+                                border.color: batchBtnHovered ? "#ff6b35" : colorTertiary
+                                border.width: 1
+                                
+                                property bool batchBtnHovered: false
+                                property bool batchBtnEnabled: !isProcessing && window.currentManga !== null
+                                
+                                // Visual feedback for disabled state
+                                opacity: batchBtnEnabled ? 1.0 : 0.6
+                                
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: 8
+                                    
+                                    Rectangle {
+                                        width: 24
+                                        height: 24
+                                        radius: 4
+                                        color: parent.parent.batchBtnHovered ? "white" : "#ff6b35"
+                                        
+                                        Label {
+                                            anchors.centerIn: parent
+                                            text: "📦"
+                                            font.pixelSize: 12
+                                            color: parent.parent.batchBtnHovered ? "#ff6b35" : "white"
+                                        }
+                                    }
+                                    
+                                    Label {
+                                        text: "BATCH"
+                                        font.pixelSize: 10
+                                        font.weight: Font.Medium
+                                        font.letterSpacing: 1
+                                        color: parent.parent.batchBtnHovered ? "white" : colorTertiary
+                                    }
+                                }
+                                
+                                MouseArea {
+                                    id: batchBtn
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    enabled: parent.batchBtnEnabled
+                                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                                    onEntered: parent.batchBtnHovered = true
+                                    onExited: parent.batchBtnHovered = false
+                                    onClicked: {
+                                        if (enabled) {
+                                            batchUploadManager.open()
+                                        }
+                                    }
+                                }
+                            }
+                            
                             Item { Layout.fillHeight: true }
                         }
                     }
@@ -1255,7 +1433,9 @@ ApplicationWindow {
                                             hoverEnabled: true
                                             onEntered: parent.folderBtnHovered = true
                                             onExited: parent.folderBtnHovered = false
-                                            onClicked: folderDialog.open()
+                                            onClicked: {
+                                                backend.selectRootFolder()
+                                            }
                                         }
                                     }
                                 }
@@ -1320,7 +1500,9 @@ ApplicationWindow {
                                             hoverEnabled: true
                                             onEntered: parent.outputFolderBtnHovered = true
                                             onExited: parent.outputFolderBtnHovered = false
-                                            onClicked: outputFolderDialog.open()
+                                            onClicked: {
+                                                backend.selectOutputFolder()
+                                            }
                                         }
                                     }
                                 }
@@ -2103,7 +2285,6 @@ ApplicationWindow {
                                         editText: backend.githubFolder
                                         
                                         Component.onCompleted: {
-                                            backend.refreshGitHubFolders()
                                             var index = model.indexOf(backend.githubFolder)
                                             if (index >= 0) {
                                                 currentIndex = index
@@ -2380,36 +2561,37 @@ ApplicationWindow {
     }
     
     // Dialogs
+    
     FolderDialog {
-        id: folderDialog
+        id: rootFolderDialog
         title: "Selecione a pasta dos mangás"
-        currentFolder: backend.rootFolder ? "file:///" + backend.rootFolder : ""
         onAccepted: {
-            let pathStr = selectedFolder.toString()
-            if (pathStr.startsWith("file:///")) {
-                pathStr = pathStr.substring(8)
-            } else if (pathStr.startsWith("file://")) {
-                pathStr = pathStr.substring(7)
-            }
-            rootFolderField.text = pathStr
+            rootFolderField.text = selectedFolder.toString()
+            backend.setRootFolder(selectedFolder.toString())
         }
     }
     
     FolderDialog {
         id: outputFolderDialog
         title: "Selecione a pasta de saída dos metadados"
-        currentFolder: backend.outputFolder ? "file:///" + backend.outputFolder : ""
         onAccepted: {
-            let pathStr = selectedFolder.toString()
-            if (pathStr.startsWith("file:///")) {
-                pathStr = pathStr.substring(8)
-            } else if (pathStr.startsWith("file://")) {
-                pathStr = pathStr.substring(7)
-            }
-            outputFolderField.text = pathStr
+            outputFolderField.text = selectedFolder.toString()
+            backend.setOutputFolder(selectedFolder.toString())
         }
     }
     
+    // Backend signal connections for folder dialogs
+    Connections {
+        target: backend
+        function onOpenRootFolderDialog(startDir) {
+            rootFolderDialog.currentFolder = "file://" + startDir
+            rootFolderDialog.open()
+        }
+        function onOpenOutputFolderDialog(startDir) {
+            outputFolderDialog.currentFolder = "file://" + startDir
+            outputFolderDialog.open()
+        }
+    }
     
     Dialog {
         id: metadataDialog
@@ -2421,13 +2603,19 @@ ApplicationWindow {
         Material.background: colorSurface
         
         property bool isEditMode: false
+        property string expectedMetadataTitle: ""
+        property bool isSubmitting: false
         title: isEditMode ? "Editar Metadados" : "Upload com Metadados"
         
         function openForUpload() {
             isEditMode = false
+            isSubmitting = false
             if (window.currentManga) {
+                expectedMetadataTitle = window.currentManga.title || ""
+                open()
                 // Carregar metadados existentes se disponível
-                backend.loadExistingMetadata(window.currentManga.title)
+                backend.loadExistingMetadata(expectedMetadataTitle)
+                return
             }
             open()
         }
@@ -2435,26 +2623,54 @@ ApplicationWindow {
         function openForEdit() {
             if (!window.currentManga) return
             isEditMode = true
-            backend.loadExistingMetadata(window.currentManga.title)
+            isSubmitting = false
+            expectedMetadataTitle = window.currentManga.title || ""
             open()
+            backend.loadExistingMetadata(expectedMetadataTitle)
+        }
+
+        onClosed: {
+            isSubmitting = false
         }
         
         Connections {
             target: backend
             function onMetadataLoaded(metadata) {
-                console.log("onMetadataLoaded called - metadata:", JSON.stringify(metadata))
+                var safeMetadata = metadata
+                if (typeof safeMetadata === "string") {
+                    if (safeMetadata.trim().length === 0) {
+                        safeMetadata = {}
+                    } else {
+                        try {
+                            safeMetadata = JSON.parse(safeMetadata)
+                        } catch (e) {
+                            console.warn("Invalid metadata payload string, using empty object")
+                            safeMetadata = {}
+                        }
+                    }
+                } else if (!safeMetadata || typeof safeMetadata !== "object") {
+                    safeMetadata = {}
+                }
+
+                var requestTitle = safeMetadata._requestMangaTitle || ""
+                if (metadataDialog.expectedMetadataTitle && requestTitle && requestTitle !== metadataDialog.expectedMetadataTitle) {
+                    console.log("Ignoring stale metadata payload for", requestTitle, "expected", metadataDialog.expectedMetadataTitle)
+                    return
+                }
+
+                console.log("onMetadataLoaded called - metadata:", JSON.stringify(safeMetadata))
                 console.log("Dialog visible:", metadataDialog.visible, "isEditMode:", metadataDialog.isEditMode)
                 
                 // Funciona tanto para upload quanto para editar
-                titleField.text = metadata.title || ""
-                descriptionField.text = metadata.description || ""
-                artistField.text = metadata.artist || ""
-                authorField.text = metadata.author || ""
-                groupField.text = metadata.group || ""
-                coverField.text = metadata.cover || ""
+                titleField.text = safeMetadata.title || ""
+                descriptionField.text = safeMetadata.description || ""
+                artistField.text = safeMetadata.artist || ""
+                authorField.text = safeMetadata.author || ""
+                groupField.text = safeMetadata.group || ""
+                coverField.text = safeMetadata.cover || ""
                 
                 var statusList = ["Em Andamento", "Completo", "Pausado", "Cancelado", "Hiato"]
-                var statusIndex = statusList.indexOf(metadata.status || "Em Andamento")
+                var statusIndex = statusList.indexOf(safeMetadata.status || "Em Andamento")
                 statusCombo.currentIndex = statusIndex >= 0 ? statusIndex : 0
                 
                 console.log("Fields updated - title:", titleField.text, "mode:", metadataDialog.isEditMode ? "edit" : "upload")
@@ -2684,6 +2900,7 @@ ApplicationWindow {
                     MouseArea {
                         id: cancelBtn
                         anchors.fill: parent
+                        enabled: !metadataDialog.isSubmitting
                         hoverEnabled: true
                         onEntered: parent.cancelBtnHovered = true
                         onExited: parent.cancelBtnHovered = false
@@ -2713,10 +2930,17 @@ ApplicationWindow {
                     MouseArea {
                         id: okBtn
                         anchors.fill: parent
+                        enabled: !metadataDialog.isSubmitting
                         hoverEnabled: true
                         onEntered: parent.okBtnHovered = true
                         onExited: parent.okBtnHovered = false
                         onClicked: {
+                            if (metadataDialog.isSubmitting) {
+                                return
+                            }
+
+                            metadataDialog.isSubmitting = true
+
                             var metadata = {
                                 title: backend.makeJsonSafe(titleField.text || ""),
                                 description: backend.makeJsonSafe(descriptionField.text || ""),
@@ -2728,15 +2952,561 @@ ApplicationWindow {
                             }
                             
                             if (metadataDialog.isEditMode) {
-                                backend.updateExistingMetadata(metadata)
+                                if (backend.updateExistingMetadata(metadata)) {
+                                    metadataDialog.close()
+                                } else {
+                                    metadataDialog.isSubmitting = false
+                                }
                             } else {
-                                backend.startUploadWithMetadata(metadata)
+                                if (backend.startUploadWithMetadata(metadata)) {
+                                    metadataDialog.close()
+                                } else {
+                                    metadataDialog.isSubmitting = false
+                                }
                             }
-                            
-                            metadataDialog.close()
                         }
                     }
                 }
+            }
+        }
+    }
+    
+    // Batch Upload Manager Dialog
+    BatchUploadManager {
+        id: batchUploadManager
+    }
+    
+    // ===== ENHANCED PERFORMANCE FOOTER =====
+    // Professional-grade always-visible performance monitoring and control footer
+    footer: Rectangle {
+        height: isLoadingLibrary ? 64 : 48  // Expand during scanning for more info
+        color: colorSurface
+        border.color: colorTertiary
+        border.width: 1
+        
+        Behavior on height { NumberAnimation { duration: 300 } }
+        
+        // Top separator line
+        Rectangle {
+            anchors.top: parent.top
+            width: parent.width
+            height: 1
+            color: colorTertiary
+            opacity: 0.2
+        }
+        
+        Column {
+            anchors.fill: parent
+            spacing: 0
+            
+            // Primary metrics row (always visible)
+            Rectangle {
+                width: parent.width
+                height: 24
+                color: "transparent"
+                
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 16
+                    anchors.rightMargin: 16
+                    spacing: 24
+            
+            // Scan Performance Section
+            RowLayout {
+                spacing: 8
+                
+                Label {
+                    text: "⚡"
+                    font.pixelSize: 10
+                    color: colorSecondary
+                }
+                
+                Label {
+                    text: "Performance:"
+                    font.pixelSize: 9
+                    font.weight: Font.Medium
+                    color: colorTertiary
+                    opacity: 0.7
+                }
+                
+                Label {
+                    id: performanceTime
+                    text: backend.lastScanTime || "0.0s"
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    color: {
+                        var time = parseFloat((backend.lastScanTime || "0.0s").replace('s', ''))
+                        if (time < 2.0) return colorSuccess
+                        if (time < 5.0) return colorWarning
+                        return "#ff4444"
+                    }
+                    
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: "Last scan time - Click for detailed breakdown"
+                        onClicked: console.log("Show detailed performance breakdown")
+                    }
+                }
+            }
+            
+            // Vertical Separator
+            Rectangle {
+                width: 1
+                height: 20
+                color: colorTertiary
+                opacity: 0.3
+            }
+            
+            // Workers Status Section
+            RowLayout {
+                spacing: 8
+                
+                Label {
+                    text: "🔧"
+                    font.pixelSize: 10
+                    color: colorSecondary
+                }
+                
+                Label {
+                    text: "Workers:"
+                    font.pixelSize: 9
+                    font.weight: Font.Medium
+                    color: colorTertiary
+                    opacity: 0.7
+                }
+                
+                Label {
+                    id: workersStatus
+                    text: (backend.activeWorkers || 0) + "/" + (backend.totalWorkers || 5)
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    color: {
+                        var active = backend.activeWorkers || 0
+                        var total = backend.totalWorkers || 5
+                        if (active === 0) return colorTertiary
+                        if (active < total) return colorWarning
+                        return colorSuccess
+                    }
+                }
+                
+                // Workers visual indicator
+                Rectangle {
+                    width: 40
+                    height: 6
+                    radius: 3
+                    color: colorPrimary
+                    border.color: colorTertiary
+                    border.width: 1
+                    
+                    Rectangle {
+                        height: parent.height - 2
+                        width: {
+                            var total = backend.totalWorkers || 5
+                            var active = backend.activeWorkers || 0
+                            return (parent.width - 2) * (active / total)
+                        }
+                        anchors.left: parent.left
+                        anchors.leftMargin: 1
+                        anchors.verticalCenter: parent.verticalCenter
+                        radius: 2
+                        color: {
+                            var active = backend.activeWorkers || 0
+                            if (active === 0) return "transparent"
+                            return colorSecondary
+                        }
+                    }
+                    
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: "Worker utilization - Click to configure"
+                        onClicked: settingsDrawer.open()
+                    }
+                }
+            }
+            
+            // Vertical Separator
+            Rectangle {
+                width: 1
+                height: 20
+                color: colorTertiary
+                opacity: 0.3
+            }
+            
+            // Cache Status Section
+            Rectangle {
+                Layout.preferredWidth: 100
+                Layout.preferredHeight: 20
+                color: "transparent"
+                
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 8
+                    
+                    Label {
+                        text: "💾"
+                        font.pixelSize: 10
+                        color: colorSecondary
+                    }
+                    
+                    Label {
+                        text: "Cache:"
+                        font.pixelSize: 9
+                        font.weight: Font.Medium
+                        color: colorTertiary
+                        opacity: 0.7
+                    }
+                    
+                    Label {
+                        id: cacheStatus
+                        text: (backend.cacheUtilization || 0) + "%"
+                        font.pixelSize: 9
+                        font.weight: Font.Bold
+                        color: {
+                            var util = backend.cacheUtilization || 0
+                            if (util > 80) return colorSuccess
+                            if (util > 50) return colorWarning
+                            return "#ff4444"
+                        }
+                        Layout.fillWidth: true
+                    }
+                    
+                    Label {
+                        text: "Hit"
+                        font.pixelSize: 8
+                        color: colorTertiary
+                        opacity: 0.5
+                    }
+                }
+                
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    ToolTip.visible: containsMouse
+                    ToolTip.text: "Cache hit rate - Left click: details, Right click: clear cache"
+                    onClicked: function(mouse) {
+                        if (mouse.button === Qt.RightButton) {
+                            // Clear cache
+                            backend.clearCache()
+                        } else {
+                            // Show cache details
+                            var stats = backend.getCacheStatistics()
+                            if (stats.enabled) {
+                                console.log("Cache Details:", 
+                                           "Hit Rate:", stats.hitRate + "%,",
+                                           "Entries:", stats.totalEntries + ",",
+                                           "Size:", stats.sizeMB.toFixed(1) + "MB")
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Vertical Separator
+            Rectangle {
+                width: 1
+                height: 20
+                color: colorTertiary
+                opacity: 0.3
+            }
+            
+            // Memory Usage Section
+            RowLayout {
+                spacing: 8
+                
+                Label {
+                    text: "🧠"
+                    font.pixelSize: 10
+                    color: colorSecondary
+                }
+                
+                Label {
+                    text: "Memory:"
+                    font.pixelSize: 9
+                    font.weight: Font.Medium
+                    color: colorTertiary
+                    opacity: 0.7
+                }
+                
+                Label {
+                    id: memoryUsage
+                    text: backend.memoryUsage || "0MB"
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    color: {
+                        var usage = backend.memoryUsage || "0MB"
+                        var value = parseInt(usage.replace(/[^\d]/g, ''))
+                        if (value < 200) return colorSuccess
+                        if (value < 500) return colorWarning
+                        return "#ff4444"
+                    }
+                    
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: "Current memory usage"
+                    }
+                }
+            }
+            
+            // Spacer
+            Item { Layout.fillWidth: true }
+            
+            // Enhanced Batch Queue Status Section  
+            Rectangle {
+                Layout.preferredWidth: 120
+                Layout.preferredHeight: 20
+                color: "transparent"
+                radius: 4
+                
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 8
+                    
+                    Rectangle {
+                        Layout.preferredWidth: 20
+                        Layout.preferredHeight: 20
+                        radius: 10
+                        color: {
+                            if (backend.batchActiveJobs > 0) return colorSuccess
+                            if (backend.batchQueueSize > 0) return colorWarning
+                            return "#404040"
+                        }
+                        
+                        Label {
+                            anchors.centerIn: parent
+                            text: "📦"
+                            font.pixelSize: 8
+                            color: "white"
+                        }
+                        
+                        // Animated border for active processing
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: parent.radius
+                            color: "transparent"
+                            border.color: colorSecondary
+                            border.width: backend.batchActiveJobs > 0 ? 2 : 0
+                            opacity: 0.7
+                            
+                            SequentialAnimation on opacity {
+                                running: backend.batchActiveJobs > 0
+                                loops: Animation.Infinite
+                                NumberAnimation { to: 0.3; duration: 800 }
+                                NumberAnimation { to: 1.0; duration: 800 }
+                            }
+                        }
+                    }
+                    
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+                        
+                        Label {
+                            text: {
+                                if (backend.batchActiveJobs > 0) {
+                                    return `Processing: ${backend.batchActiveJobs}/${backend.batchQueueSize}`
+                                } else if (backend.batchQueueSize > 0) {
+                                    return `Queue: ${backend.batchQueueSize} jobs`
+                                } else {
+                                    return "Batch: Idle"
+                                }
+                            }
+                            font.pixelSize: 9
+                            font.weight: Font.Medium
+                            color: {
+                                if (backend.batchActiveJobs > 0) return colorSuccess
+                                if (backend.batchQueueSize > 0) return colorWarning
+                                return colorTertiary
+                            }
+                            Layout.fillWidth: true
+                        }
+                        
+                        // Progress indicator for active jobs
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 2
+                            color: "#404040"
+                            visible: backend.batchActiveJobs > 0 || backend.batchQueueSize > 0
+                            
+                            Rectangle {
+                                width: {
+                                    var total = backend.batchQueueSize || 1
+                                    var progress = Math.max(0, total - backend.batchActiveJobs) / total
+                                    return parent.width * progress
+                                }
+                                height: parent.height
+                                color: backend.batchActiveJobs > 0 ? colorSuccess : colorWarning
+                                
+                                Behavior on width { NumberAnimation { duration: 300 } }
+                            }
+                        }
+                    }
+                }
+                
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    
+                    ToolTip.visible: containsMouse
+                    ToolTip.text: {
+                        var status = "Batch Queue Status:\n"
+                        status += `• Active Jobs: ${backend.batchActiveJobs}\n`
+                        status += `• Queued Jobs: ${backend.batchQueueSize}\n`
+                        status += "Click to open Batch Manager"
+                        return status
+                    }
+                    
+                    onClicked: {
+                        // Open the batch upload manager dialog
+                        batchUploadManager.open()
+                    }
+                    
+                    // Subtle hover feedback
+                    Rectangle {
+                        anchors.fill: parent
+                        color: colorSecondary
+                        opacity: parent.containsMouse ? 0.1 : 0.0
+                        radius: 4
+                        
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                    }
+                }
+            }
+                }
+            }
+            
+            // Secondary row (visible during scanning or with additional info)
+            Rectangle {
+                width: parent.width
+                height: isLoadingLibrary ? 24 : 0
+                color: "transparent"
+                visible: height > 0
+                
+                Behavior on height { NumberAnimation { duration: 300 } }
+                
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 16
+                    anchors.rightMargin: 16
+                    spacing: 16
+                    
+                    // Current scanning info
+                    RowLayout {
+                        spacing: 8
+                        visible: isLoadingLibrary
+                        
+                        Label {
+                            text: "📁"
+                            font.pixelSize: 8
+                            color: colorSecondary
+                        }
+                        
+                        Label {
+                            text: "Status:"
+                            font.pixelSize: 8
+                            color: colorTertiary
+                            opacity: 0.7
+                        }
+                        
+                        Label {
+                            text: {
+                                if (backend.scanProgress === 0) return "Preparando..."
+                                if (backend.scanProgress < 100) return "Escaneando pastas..."
+                                return "Varredura concluída"
+                            }
+                            font.pixelSize: 8
+                            color: backend.scanProgress >= 100 ? colorSuccess : colorSecondary
+                        }
+                    }
+                    
+                    // Separator
+                    Rectangle {
+                        width: 1
+                        height: 12
+                        color: colorTertiary
+                        opacity: 0.3
+                        visible: isLoadingLibrary
+                    }
+                    
+                    // Performance tip/info
+                    RowLayout {
+                        spacing: 8
+                        visible: isLoadingLibrary
+                        
+                        Label {
+                            text: "💡"
+                            font.pixelSize: 8
+                            color: colorWarning
+                        }
+                        
+                        Label {
+                            text: {
+                                var time = parseFloat((backend.lastScanTime || "0.0s").replace('s', ''))
+                                if (time > 10) return "Biblioteca muito grande - considere cache"
+                                if (time > 5) return "Varredura demorada - otimização recomendada"
+                                return "Performance boa - varredura rápida"
+                            }
+                            font.pixelSize: 8
+                            color: colorTertiary
+                            opacity: 0.8
+                        }
+                    }
+                    
+                    // Spacer
+                    Item { Layout.fillWidth: true }
+                    
+                    // Quick actions during scan
+                    RowLayout {
+                        spacing: 8
+                        visible: isLoadingLibrary && backend.scanProgress < 100
+                        
+                        Rectangle {
+                            width: 60
+                            height: 16
+                            radius: 8
+                            color: cancelBtnHovered ? "#ff4444" : "transparent"
+                            border.color: "#ff4444"
+                            border.width: 1
+                            
+                            property bool cancelBtnHovered: false
+                            
+                            Label {
+                                anchors.centerIn: parent
+                                text: "PARAR"
+                                font.pixelSize: 7
+                                font.weight: Font.Bold
+                                color: parent.cancelBtnHovered ? "white" : "#ff4444"
+                            }
+                            
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onEntered: parent.cancelBtnHovered = true
+                                onExited: parent.cancelBtnHovered = false
+                                onClicked: {
+                                    backend.cancelProgressiveScan()
+                                    isLoadingLibrary = false
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Bottom separator line (when expanded)
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: colorTertiary
+                opacity: 0.1
+                visible: isLoadingLibrary
             }
         }
     }

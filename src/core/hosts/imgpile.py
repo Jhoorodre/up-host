@@ -1,7 +1,6 @@
 import httpx
 from pathlib import Path
-from typing import Optional, List
-import asyncio
+from typing import Optional, List, Any, cast
 import base64
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -163,13 +162,13 @@ class ImgPileHost(BaseHost):
         """ImgPile doesn't support album creation in standard implementation"""
         return None
     
-    async def get_image_info(self, image_id: str) -> Optional[dict]:
+    async def get_image_info(self, image_id: str) -> Optional[dict[str, Any]]:
         """Get image information by ID"""
         try:
             url = f"{self.base_url}/api/images/{image_id}"
             response = await self.client.get(url)
             response.raise_for_status()
-            return response.json()
+            return cast(dict[str, Any], response.json())
         except Exception:
             return None
     

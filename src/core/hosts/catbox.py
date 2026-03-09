@@ -1,7 +1,6 @@
 import httpx
 from pathlib import Path
 from typing import Optional, List
-import asyncio
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from .base import BaseHost

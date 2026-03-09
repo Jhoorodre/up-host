@@ -1,9 +1,8 @@
 """Manga and chapter management handler for UI backend"""
 
 import json
-import asyncio
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, cast
 from PySide6.QtCore import QObject, Signal, Property, Slot
 from core.config import ConfigManager
 from core.models import Manga, Chapter
@@ -18,7 +17,7 @@ class MangaManager(QObject):
     
     mangaListChanged = Signal()
     chapterListChanged = Signal()
-    mangaInfoChanged = Signal('QVariant')  # CRITICAL: Add mangaInfoChanged signal
+    mangaInfoChanged = Signal(object)  # CRITICAL: Add mangaInfoChanged signal
     uploadProgressChanged = Signal(str, int)
     uploadCompleted = Signal(str)
     uploadFailed = Signal(str, str)
@@ -99,7 +98,7 @@ class MangaManager(QObject):
                         description=""  # Will be loaded from metadata
                     )
                     # Add chapter count as custom attribute
-                    manga._chapter_count = chapter_count
+                    setattr(manga, "_chapter_count", chapter_count)
                     mangas.append(manga)
             
             # Sort by title
@@ -421,7 +420,7 @@ class MangaManager(QObject):
     def set_selected_chapters(self, chapter_indices: List[int]):
         """Set selected chapters for upload"""
         try:
-            chapters = self.chapter_model.chapters
+            chapters = getattr(self.chapter_model, '_chapters', [])
             self.selected_chapters = [chapters[i] for i in chapter_indices if i < len(chapters)]
             logger.debug(f"Selected {len(self.selected_chapters)} chapters for upload")
         except Exception as e:
@@ -448,7 +447,7 @@ class MangaManager(QObject):
             manga_info = {
                 "title": self.current_manga.title,
                 "path": str(self.current_manga.path),
-                "chapter_count": self.current_manga.chapter_count,
+                "chapter_count": len(self.current_manga.chapters or []),
                 "cover_url": self.current_manga.cover_url,
                 "description": self.current_manga.description,
                 "selected_chapters": len(self.selected_chapters)
@@ -504,7 +503,7 @@ class MangaManager(QObject):
                             description=""  # TODO: Load from metadata
                         )
                         # Add chapter count as custom attribute
-                        manga._chapter_count = chapter_count
+                        setattr(manga, "_chapter_count", chapter_count)
                         mangas.append(manga)
             
             # Sort by title
@@ -755,7 +754,7 @@ class MangaManager(QObject):
             manga_info = self._load_manga_info(manga.title, chapter_count)
             
             if manga_info and manga_info.get('cover'):
-                return manga_info['cover']
+                return cast(str, manga_info['cover'])
                     
         except Exception as e:
             logger.debug(f"Could not load cover for {manga.title}: {e}")
@@ -834,7 +833,7 @@ class MangaManager(QObject):
         """Get selected chapter names for upload (compatibility method)"""
         try:
             if hasattr(self.chapter_model, 'getSelectedChapters'):
-                return self.chapter_model.getSelectedChapters()
+                return cast(List[str], self.chapter_model.getSelectedChapters())
             return []
         except Exception as e:
             logger.error(f"Error getting selected chapters: {e}")
@@ -958,3 +957,20 @@ class MangaManager(QObject):
         except Exception as e:
             logger.error(f"Error updating metadata: {e}")
             raise
+    
+    def add_manga_incremental(self, manga: Manga):
+        """Add manga to the model incrementally during progressive scanning"""
+        try:
+            if not getattr(manga, "cover_url", ""):
+                manga.cover_url = self._load_manga_cover(manga)
+
+            # Add to the manga model for immediate UI update
+            self.manga_model.add_manga(manga)
+            
+            # Emit signal to refresh UI
+            self.mangaListChanged.emit()
+            
+            logger.debug(f"Added manga incrementally to UI: {manga.title}")
+            
+        except Exception as e:
+            logger.error(f"Error adding manga incrementally: {e}")

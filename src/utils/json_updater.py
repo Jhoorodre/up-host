@@ -4,7 +4,7 @@ Handles merging new chapters with existing JSON files
 """
 import json
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional, cast
 from loguru import logger
 
 
@@ -19,7 +19,7 @@ class JSONUpdater:
             
         try:
             with open(json_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                return cast(Dict[str, Any], json.load(f))
         except Exception as e:
             logger.error(f"Error loading existing JSON {json_path}: {e}")
             return None

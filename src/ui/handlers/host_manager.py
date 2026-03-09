@@ -222,7 +222,9 @@ class HostManager(QObject):
                     
                     # Test basic functionality
                     try:
-                        import pyimgbox
+                        import importlib.util
+                        if importlib.util.find_spec("pyimgbox") is None:
+                            raise ImportError("pyimgbox not installed")
                         # TODO: Emit success signal to backend
                         logger.info("✅ Cookie accepted! pyimgbox working correctly")
                     except ImportError:
@@ -233,8 +235,8 @@ class HostManager(QObject):
                     # Clean up
                     try:
                         temp_path.unlink()
-                    except:
-                        pass
+                    except OSError as exc:
+                        logger.debug(f"Temp file cleanup failed during cookie test: {exc}")
                         
                 except Exception as e:
                     logger.error(f"❌ Test error: {str(e)}")
@@ -245,11 +247,3 @@ class HostManager(QObject):
         except Exception as e:
             logger.error(f"Error testing Imgbox cookie: {e}")
     
-    def get_current_host(self) -> Optional[BaseHost]:
-        """Get current selected host instance"""
-        selected_host = self.config_manager.config.selected_host
-        return self.hosts.get(selected_host)
-    
-    def get_host(self, host_name: str) -> Optional[BaseHost]:
-        """Get specific host instance"""
-        return self.hosts.get(host_name)

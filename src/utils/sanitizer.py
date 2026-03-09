@@ -3,7 +3,6 @@ Utilities for sanitizing file names and removing accents
 """
 import re
 import unicodedata
-from pathlib import Path
 
 
 def sanitize_filename(name: str) -> str:

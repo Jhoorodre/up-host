@@ -220,3 +220,29 @@ class ConfigHandler(QObject):
                     host_config.max_workers = config_dict["maxWorkers"]
                 if "rateLimit" in config_dict:
                     host_config.rate_limit = float(config_dict["rateLimit"])
+    
+    def set_root_folder(self, folder_path: str):
+        """Set root folder from folder selection dialog"""
+        try:
+            if folder_path:
+                clean_path = self._clean_file_url(folder_path)
+                self.config_manager.config.root_folder = Path(clean_path)
+                self.config_manager.save_config()
+                self.configChanged.emit()
+                logger.info(f"Root folder updated to: {clean_path}")
+        except Exception as e:
+            logger.error(f"Error setting root folder: {e}")
+            raise
+    
+    def set_output_folder(self, folder_path: str):
+        """Set output folder from folder selection dialog"""
+        try:
+            if folder_path:
+                clean_path = self._clean_file_url(folder_path)
+                self.config_manager.config.output_folder = Path(clean_path)
+                self.config_manager.save_config()
+                self.configChanged.emit()
+                logger.info(f"Output folder updated to: {clean_path}")
+        except Exception as e:
+            logger.error(f"Error setting output folder: {e}")
+            raise

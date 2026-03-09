@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Optional
 from enum import Enum
 from pathlib import Path
 from utils.helpers import natural_sort_key
@@ -45,7 +45,7 @@ class Manga:
     author: str = ""
     cover_url: str = ""
     status: MangaStatus = MangaStatus.ONGOING
-    chapters: List[Chapter] = None
+    chapters: Optional[List[Chapter]] = None
     
     def __post_init__(self):
         if self.chapters is None:
@@ -57,7 +57,7 @@ class Manga:
     
     def _scan_chapters(self, structure: str = "standard") -> List[Chapter]:
         """Scan manga directory for chapters based on structure type"""
-        chapters = []
+        chapters: List[Chapter] = []
         if not self.path.exists() or not self.path.is_dir():
             return chapters
             

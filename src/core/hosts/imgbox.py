@@ -1,8 +1,7 @@
 import asyncio
 import tempfile
-import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, cast
 
 from loguru import logger
 
@@ -33,9 +32,9 @@ class ImgboxHost(BaseHost):
     def _get_session_cookie(self) -> Optional[str]:
         """Get session cookie from config"""
         if isinstance(self.config, dict):
-            return self.config.get('session_cookie', '')
+            return cast(Optional[str], self.config.get('session_cookie', ''))
         elif hasattr(self.config, 'session_cookie'):
-            return self.config.session_cookie
+            return cast(Optional[str], self.config.session_cookie)
         return None
     
     def _convert_webp_to_jpg(self, filepath: Path) -> tuple[Path, Optional[object]]:
@@ -56,8 +55,10 @@ class ImgboxHost(BaseHost):
             with Image.open(filepath) as img:
                 # Convert to RGB if needed (WebP might have transparency)
                 if img.mode in ('RGBA', 'LA', 'P'):
-                    img = img.convert('RGB')
-                img.save(temp_path, 'JPEG', quality=95)
+                    rgb_img = img.convert('RGB')
+                    rgb_img.save(temp_path, 'JPEG', quality=95)
+                else:
+                    img.save(temp_path, 'JPEG', quality=95)
             
             logger.debug(f"WebP converted to temporary JPG: {temp_path}")
             return temp_path, temp_file
@@ -69,22 +70,22 @@ class ImgboxHost(BaseHost):
             logger.warning(f"WebP conversion failed: {e}, uploading WebP directly")
             return filepath, None
     
-    def _cleanup_temp_file(self, temp_file: object, temp_path: Path):
+    async def _cleanup_temp_file(self, temp_file: object, temp_path: Path):
         """Clean up temporary file with retry mechanism"""
         if not temp_file:
             return
         
         for attempt in range(3):
             try:
-                time.sleep(0.1)  # Small delay to ensure file is released
+                await asyncio.sleep(0.1)  # Small delay to ensure file is released
                 temp_path.unlink()
                 logger.debug("Temporary JPG file cleaned up")
                 break
-            except Exception as e:
+            except Exception:
                 if attempt == 2:  # Last attempt
                     logger.debug(f"Temporary file will be cleaned by OS: {temp_path}")
                 else:
-                    time.sleep(0.5)  # Wait before retry
+                    await asyncio.sleep(0.5)  # Wait before retry
     
     async def _collect_submissions_async(self, gallery, filepath: Path) -> List:
         """Collect submissions using async generator"""
@@ -112,16 +113,15 @@ class ImgboxHost(BaseHost):
         logger.debug("Starting file upload with async generator...")
         logger.debug(f"Adding file to gallery: {filepath}")
         
+        # This method runs inside a worker thread (via run_in_executor).
+        # Use a dedicated event loop per call to avoid nested-loop errors.
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.get_event_loop()
             submissions = loop.run_until_complete(
                 self._collect_submissions_async(gallery, filepath)
             )
-        except RuntimeError:
-            # No event loop, create one
-            submissions = asyncio.run(
-                self._collect_submissions_async(gallery, filepath)
-            )
+        finally:
+            loop.close()
         
         logger.debug(f"Upload submissions received: {submissions}")
         return submissions
@@ -187,7 +187,7 @@ class ImgboxHost(BaseHost):
             upload_path, temp_file = self._convert_webp_to_jpg(filepath)
             
             # Run upload in thread pool since pyimgbox is synchronous
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None, 
                 self._sync_upload, 
@@ -197,7 +197,7 @@ class ImgboxHost(BaseHost):
             
             # Clean up temporary file
             if temp_file and upload_path != filepath:
-                self._cleanup_temp_file(temp_file, upload_path)
+                await self._cleanup_temp_file(temp_file, upload_path)
             
             # Update result with original filename
             if result and upload_path != filepath:
