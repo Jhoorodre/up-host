@@ -9,11 +9,11 @@ Aplicação moderna e profissional para upload de mangás com interface QML, arq
 - 🔌 **Sistema de hosts plugável** com 10+ provedores suportados
 - 🔄 **Retry automático** com backoff exponencial
 - 📊 **Progresso em tempo real** com fila de processamento
-- � **Upload inteligente** com detecção automática de imagens
+- 🖼️ **Upload inteligente** com detecção automática de imagens
 
 ### Interface e Experiência
-- �🎨 **Interface moderna QML** com Material Design dark theme
-- � **Design responsivo** com alta nitidez e contraste
+- 🎨 **Interface moderna QML** com Material Design dark theme
+- 📱 **Design responsivo** com alta nitidez e contraste
 - 🖱️ **Interação intuitiva** com seleção múltipla de capítulos
 - 🔧 **Configuração visual** de hosts e credenciais
 
@@ -55,7 +55,7 @@ Aplicação moderna e profissional para upload de mangás com interface QML, arq
 | **ImgHippo** | ✅ Ativo | Upload anônimo |
 | **ImgPile** | ✅ Ativo | Instâncias customizáveis |
 
-## � Instalação e Configuração
+## 📦 Instalação e Configuração
 
 ### Pré-requisitos
 - Python 3.8+ (recomendado 3.11+)
@@ -95,8 +95,8 @@ pip install pytest pytest-asyncio black flake8 mypy PyInstaller
 # Método 1: Script de entrada (recomendado)
 python run.py
 
-# Método 2: Executável Windows (após build)
-./start_app.bat  # Windows
+# Método 2: Launcher Windows/WSL
+./mangauploadpro.bat  # Windows
 
 # Método 3: Direto do src
 cd src && python main.py
@@ -160,17 +160,13 @@ up-host/
 │       ├── sanitizer.py      # Sanitização de nomes
 │       └── json_updater.py   # Merge inteligente de JSONs
 ├── docs/                     # Documentação
-│   ├── STATUS.md            # Status do desenvolvimento
-│   ├── ROADMAP.md           # Roadmap de features
-│   ├── MIGRATION.md         # Guia de migração
-│   ├── INDEXADOR_SYSTEM.md  # Sistema de indexação
-│   └── NEW_HOSTS.md         # Como adicionar novos hosts
+│   
 ├── tests/                    # Testes automatizados
 │   ├── test_core.py         # Testes da lógica core
 │   └── __init__.py
-├── build.py                  # Script de build (PyInstaller)
 ├── run.py                   # Entry point simplificado
-├── start_app.bat           # Launcher para Windows
+├── mangauploadpro.bat       # Launcher para Windows/WSL
+├── .env.example             # Exemplo de variáveis de ambiente
 ├── requirements.txt        # Dependências Python
 ├── pyproject.toml         # Configuração do projeto
 └── README.md              # Este arquivo
@@ -181,8 +177,8 @@ up-host/
 ### Criar Executável
 
 ```bash
-# Build standalone executable
-python build.py
+# Exemplo com PyInstaller (manual)
+pyinstaller src/main.py --name MangaUploaderPro --onefile --windowed
 
 # O executável será gerado em:
 # - Windows: dist/MangaUploaderPro.exe
@@ -192,7 +188,7 @@ python build.py
 
 ### Configuração do Build
 
-O build inclui:
+O build (manual) inclui:
 - ✅ Executável standalone (--onefile)
 - ✅ Interface gráfica (--windowed)
 - ✅ Assets QML inclusos
@@ -271,7 +267,7 @@ O Manga Uploader Pro inclui um sistema avançado de indexação JSON para grupos
 ### Variáveis de Ambiente (Opcional)
 
 ```env
-# .env file (opcional)
+# Baseie-se no arquivo .env.example
 MANGA_ROOT_FOLDER=C:\Manga
 MANGA_OUTPUT_FOLDER=C:\Output
 GITHUB_TOKEN=ghp_xxxxx
@@ -322,9 +318,7 @@ logger.add("debug.log", level="DEBUG")
 ## 🚀 Contribuição
 
 Contribuições são bem-vindas! Veja os arquivos em `docs/` para:
-- `NEW_HOSTS.md` - Como adicionar novos hosts
-- `ROADMAP.md` - Features planejadas
-- `STATUS.md` - Status atual do desenvolvimento
+- `BUGMAP.md` - Registro de bugs, correções e pendências
 
 ## 📄 Licença
 
@@ -334,4 +328,5 @@ MIT License - veja `pyproject.toml` para detalhes completos.
 
 - **Documentação**: Pasta `docs/`
 - **Issues**: Use o sistema de issues do GitHub
+
 - **Releases**: Executáveis pré-compilados (quando disponível)

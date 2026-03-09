@@ -51,6 +51,8 @@ cover/
 
 # Environment variables
 .env
+.env.*
+!.env.example
 .venv
 .claude
 env/
@@ -156,6 +158,9 @@ settings_local.py
 config_local.json
 .claude/
 settings.local.json
+
+# Local tool state
+.claude/settings.local.json
 
 # Application data and logs
 logs/
