@@ -12,6 +12,18 @@ import qasync  # type: ignore[import-untyped]
 from ui.backend import Backend
 
 
+def get_resource_path(relative_path: str) -> Path:
+    """Get path to resource, handling both dev and PyInstaller bundled scenarios"""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Running as compiled executable
+        base_path = Path(sys._MEIPASS)
+    else:
+        # Running from source
+        base_path = Path(__file__).parent
+
+    return base_path / relative_path
+
+
 def setup_logging():
     """Configure logging"""
     log_dir = Path.home() / ".manga_uploader" / "logs"
@@ -57,7 +69,7 @@ def main():
     engine.rootContext().setContextProperty("githubFolderModel", backend.githubFolderModel)
     
     # Load QML
-    qml_file = Path(__file__).parent / "ui" / "qml" / "main.qml"
+    qml_file = get_resource_path("ui/qml/main.qml")
     engine.load(str(qml_file))
     
     if not engine.rootObjects():

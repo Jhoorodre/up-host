@@ -85,6 +85,7 @@ jobs:
           --hidden-import=beautifulsoup4 `
           --hidden-import=soupsieve `
           --hidden-import=pyimgbox `
+          --hidden-import=importlib `
           --collect-all=PySide6 `
           --collect-all=loguru `
           --add-data "src/ui/qml:ui/qml" `
