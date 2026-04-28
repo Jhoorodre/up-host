@@ -34,9 +34,35 @@ jobs:
           --distpath dist `
           --paths src `
           --hidden-import=core `
+          --hidden-import=core.config `
+          --hidden-import=core.hosts `
+          --hidden-import=core.models `
+          --hidden-import=core.services `
           --hidden-import=ui `
+          --hidden-import=ui.backend `
+          --hidden-import=ui.handlers `
+          --hidden-import=ui.models `
           --hidden-import=utils `
-          --collect-all=PySide6
+          --hidden-import=utils.helpers `
+          --hidden-import=utils.json_updater `
+          --hidden-import=utils.sanitizer `
+          --hidden-import=loguru `
+          --hidden-import=qasync `
+          --hidden-import=aiohttp `
+          --hidden-import=aiofiles `
+          --hidden-import=httpx `
+          --hidden-import=pydantic `
+          --hidden-import=tenacity `
+          --hidden-import=psutil `
+          --hidden-import=PIL `
+          --hidden-import=yaml `
+          --hidden-import=dotenv `
+          --hidden-import=watchdog `
+          --hidden-import=beautifulsoup4 `
+          --hidden-import=pyimgbox `
+          --collect-all=PySide6 `
+          --add-data "src/ui/qml:ui/qml" `
+          --add-data "src/ui/qml/assets:ui/qml/assets"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
