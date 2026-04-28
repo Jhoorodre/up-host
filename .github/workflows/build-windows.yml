@@ -27,7 +27,16 @@ jobs:
 
     - name: Build executable
       run: |
-        pyinstaller src/main.py --name MangaUploaderPro --onefile --windowed --distpath dist
+        pyinstaller src/main.py `
+          --name MangaUploaderPro `
+          --onefile `
+          --windowed `
+          --distpath dist `
+          --paths src `
+          --hidden-import=core `
+          --hidden-import=ui `
+          --hidden-import=utils `
+          --collect-all=PySide6
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
