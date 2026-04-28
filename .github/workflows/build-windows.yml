@@ -36,11 +36,34 @@ jobs:
           --hidden-import=core `
           --hidden-import=core.config `
           --hidden-import=core.hosts `
+          --hidden-import=core.hosts.base `
+          --hidden-import=core.hosts.catbox `
+          --hidden-import=core.hosts.gofile `
+          --hidden-import=core.hosts.imagechest `
+          --hidden-import=core.hosts.imgbb `
+          --hidden-import=core.hosts.imgbox `
+          --hidden-import=core.hosts.imghippo `
+          --hidden-import=core.hosts.imgpile `
+          --hidden-import=core.hosts.imgur `
+          --hidden-import=core.hosts.lensdump `
+          --hidden-import=core.hosts.pixeldrain `
           --hidden-import=core.models `
+          --hidden-import=core.models.indexador `
           --hidden-import=core.services `
+          --hidden-import=core.services.batch_service `
+          --hidden-import=core.services.cache_service `
+          --hidden-import=core.services.github `
+          --hidden-import=core.services.performance_service `
+          --hidden-import=core.services.queue `
+          --hidden-import=core.services.scan_service `
+          --hidden-import=core.services.uploader `
           --hidden-import=ui `
           --hidden-import=ui.backend `
           --hidden-import=ui.handlers `
+          --hidden-import=ui.handlers.config_handler `
+          --hidden-import=ui.handlers.github_manager `
+          --hidden-import=ui.handlers.host_manager `
+          --hidden-import=ui.handlers.manga_manager `
           --hidden-import=ui.models `
           --hidden-import=utils `
           --hidden-import=utils.helpers `
@@ -58,11 +81,14 @@ jobs:
           --hidden-import=yaml `
           --hidden-import=dotenv `
           --hidden-import=watchdog `
+          --hidden-import=platformdirs `
           --hidden-import=beautifulsoup4 `
+          --hidden-import=soupsieve `
           --hidden-import=pyimgbox `
           --collect-all=PySide6 `
+          --collect-all=loguru `
           --add-data "src/ui/qml:ui/qml" `
-          --add-data "src/ui/qml/assets:ui/qml/assets"
+          --add-data "src/ui/qml/components:ui/qml/components"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
